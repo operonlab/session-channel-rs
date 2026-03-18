@@ -1,0 +1,19 @@
+[project]
+name = "session-channel"
+version = "0.1.0"
+description = "Cross-session communication channel via Redis Streams"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "redis[hiredis]>=5.0.0",
+    "itsdangerous>=2.2.0",
+    "jinja2>=3.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
