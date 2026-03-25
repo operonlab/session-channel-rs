@@ -12,7 +12,7 @@ _CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 @dataclass
 class Config:
-    port: int = 4106
+    port: int = 10101
     host: str = "127.0.0.1"
     redis_url: str = "redis://127.0.0.1:6379/0"
     secret_key: str = "change-me-in-production"
