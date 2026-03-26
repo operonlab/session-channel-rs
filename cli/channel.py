@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 
 import httpx
 
-BASE_URL = os.environ.get("SESSION_CHANNEL_URL", "http://localhost:4106")
+BASE_URL = os.environ.get("SESSION_CHANNEL_URL", "http://localhost:10101")
 LOCAL_KEY = os.environ.get("SESSION_CHANNEL_KEY", "change-me-in-production")
 HEADERS = {"x-local-key": LOCAL_KEY, "Content-Type": "application/json"}
 TIMEOUT = 10
@@ -52,7 +51,9 @@ def cmd_read(args):
     params = {"count": args.count}
     r = httpx.get(
         f"{BASE_URL}/api/messages/{args.topic}",
-        params=params, headers=HEADERS, timeout=TIMEOUT,
+        params=params,
+        headers=HEADERS,
+        timeout=TIMEOUT,
     )
     d = r.json()
     for m in d.get("messages", []):
