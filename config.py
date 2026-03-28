@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from workshop.station_bootstrap import load_yaml_config
+from sdk_client.station_bootstrap import load_yaml_config
 
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
