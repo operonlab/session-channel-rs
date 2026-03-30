@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core"))
 
 from src.shared.actions import create_action, create_reducer, on
 from src.shared.immutable_utils import update_in
+from src.shared.selectors import create_selector
 from src.shared.store import FeatureStore
 
 # ── Actions ──────────────────────────────────────────────────────────────
@@ -61,6 +62,43 @@ channel_reducer = create_reducer(
             lambda prev: (prev or 0) + a.payload.get("trimmed", 0),
         ),
     ),
+)
+
+# ── Selectors ─────────────────────────────────────────────────────────────
+
+select_topics = create_selector(lambda s: s["topics"])
+select_subscriber_count = create_selector(lambda s: s["subscriber_count"])
+select_message_count = create_selector(lambda s: s["message_count"])
+
+select_topic_names = create_selector(
+    select_topics,
+    result_fn=lambda topics: list(topics.keys()),
+)
+
+select_topic_count = create_selector(
+    select_topics,
+    result_fn=lambda topics: len(topics),
+)
+
+select_topic_by_name = lambda name: create_selector(  # noqa: E731
+    select_topics,
+    result_fn=lambda topics: topics.get(name),
+)
+
+select_active_topics = create_selector(
+    select_topics,
+    result_fn=lambda topics: {k: v for k, v in topics.items() if v is not None},
+)
+
+select_channel_summary = create_selector(
+    select_topics,
+    select_subscriber_count,
+    select_message_count,
+    result_fn=lambda topics, subs, msgs: {
+        "topic_count": len(topics),
+        "subscriber_count": subs,
+        "message_count": msgs,
+    },
 )
 
 # ── Store Singleton ───────────────────────────────────────────────────────
