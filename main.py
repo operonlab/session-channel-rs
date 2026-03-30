@@ -11,10 +11,10 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
-from sdk_client.station_bootstrap import setup_logging
 
 from config import config
 from routes import router, sse_broadcast
+from sdk_client.station_bootstrap import setup_logging
 
 logger = setup_logging("session-channel")
 _TEMPLATE_PATH = Path(__file__).parent / "templates" / "index.html"
@@ -81,9 +81,7 @@ async def _fanout_loop(r: aioredis.Redis) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: connect Redis, start background tasks."""
-    r = aioredis.from_url(
-        config.redis_url, decode_responses=True, socket_connect_timeout=3
-    )
+    r = aioredis.from_url(config.redis_url, decode_responses=True, socket_connect_timeout=3)
     try:
         await r.ping()
         logger.info("redis_connected: %s", config.redis_url)
@@ -91,6 +89,11 @@ async def lifespan(app: FastAPI):
         logger.warning("redis_unavailable: %s", config.redis_url)
 
     app.state.redis = r
+
+    # Wire reactive store
+    from store import channel_store
+
+    app.state.store = channel_store
 
     trim_task = asyncio.create_task(_trim_loop(r))
     # Note: fanout_loop is only needed if SSE clients connect without going through
@@ -133,9 +136,7 @@ async def dashboard():
 def cli():
     import uvicorn
 
-    uvicorn.run(
-        "main:app", host=config.host, port=config.port, reload=False, log_level="info"
-    )
+    uvicorn.run("main:app", host=config.host, port=config.port, reload=False, log_level="info")
 
 
 if __name__ == "__main__":

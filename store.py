@@ -11,10 +11,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core"))
 
+import logging
+
 from src.shared.actions import create_action, create_reducer, on
 from src.shared.immutable_utils import update_in
+from src.shared.middleware import LoggerMiddleware
 from src.shared.selectors import create_selector
-from src.shared.store import FeatureStore
+from src.shared.store import FeatureStore, effect, register_effects
+
+logger = logging.getLogger(__name__)
 
 # ── Actions ──────────────────────────────────────────────────────────────
 
@@ -109,4 +114,33 @@ select_channel_summary = create_selector(
 
 # ── Store Singleton ───────────────────────────────────────────────────────
 
-channel_store: FeatureStore = FeatureStore("session-channel", channel_reducer)
+channel_store: FeatureStore = FeatureStore(
+    "session-channel",
+    channel_reducer,
+    middlewares=[LoggerMiddleware("session-channel")],
+)
+
+# ── Effects ──────────────────────────────────────────────────────────────────
+
+
+@effect(MessagePublished, store=channel_store)
+async def log_message_published(action, store) -> None:
+    """Log message published for throughput tracking."""
+    payload = action.payload or {}
+    logger.info(
+        "channel.message.published",
+        extra={"topic": payload.get("topic")},
+    )
+
+
+@effect(StreamTrimmed, store=channel_store)
+async def log_stream_trimmed(action, store) -> None:
+    """Log stream trim operation."""
+    payload = action.payload or {}
+    logger.info(
+        "channel.stream.trimmed",
+        extra={"topic": payload.get("topic"), "trimmed": payload.get("trimmed", 0)},
+    )
+
+
+register_effects(channel_store, log_message_published, log_stream_trimmed)
