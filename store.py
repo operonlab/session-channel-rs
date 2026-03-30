@@ -32,14 +32,20 @@ _INITIAL_STATE = {
     "message_count": 0,
 }
 
+
+def _p(action):
+    """Safe payload accessor — returns empty dict if payload is None."""
+    return action.payload or {}
+
+
 channel_reducer = create_reducer(
     _INITIAL_STATE,
     on(
         TopicCreated,
         lambda s, a: update_in(
             s,
-            ["topics", a.payload.get("topic", "")],
-            lambda _: {"created_at": a.payload.get("ts"), "message_count": 0},
+            ["topics", _p(a).get("topic", "")],
+            lambda _: {"created_at": _p(a).get("ts"), "message_count": 0},
         ),
     ),
     on(
@@ -58,8 +64,8 @@ channel_reducer = create_reducer(
         StreamTrimmed,
         lambda s, a: update_in(
             s,
-            ["topics", a.payload.get("topic", ""), "trimmed_count"],
-            lambda prev: (prev or 0) + a.payload.get("trimmed", 0),
+            ["topics", _p(a).get("topic", ""), "trimmed_count"],
+            lambda prev: (prev or 0) + _p(a).get("trimmed", 0),
         ),
     ),
 )
