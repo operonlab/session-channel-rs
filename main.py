@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import redis.asyncio as aioredis
+from board_routes import board_router
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -36,6 +37,10 @@ async def _trim_loop(r: aioredis.Redis) -> None:
                 if await r.xlen(stream_key) == 0:
                     await r.delete(stream_key)
                     await r.srem(config.topics_key, t)
+                    # Clean up associated board claims hash
+                    if t.startswith("board:"):
+                        board_id = t.removeprefix("board:")
+                        await r.delete(f"ws:board:claims:{board_id}")
             if trimmed:
                 logger.info("trimmed %d messages", trimmed)
         except asyncio.CancelledError:
@@ -126,6 +131,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(board_router)
 
 
 @app.get("/", response_class=HTMLResponse)
