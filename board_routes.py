@@ -120,13 +120,11 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
     ck = _claims_key(board_id)
     now = str(int(time.time()))
 
-    result = await redis.evalsha(_claim_sha, 1, ck, task_id, pane, now)
+    ttl = str(config.ttl_seconds)
+    result = await redis.evalsha(_claim_sha, 1, ck, task_id, pane, now, ttl)
 
-    if result == 1:
-        # Set TTL on claims hash (refresh on each claim)
-        await redis.expire(ck, config.ttl_seconds)
-
-        # Write claim event to stream (for SSE broadcast)
+    if result is None:
+        # Success — nil return means no prior holder
         sk = _stream_key(board_id)
         entry = {
             "sender": pane,
@@ -137,23 +135,24 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
         await redis.xadd(sk, entry, maxlen=config.max_stream_len, approximate=True)
         await redis.sadd(config.topics_key, f"board:{board_id}")
 
-        sse_broadcast({
-            "topic": f"board:{board_id}", "tag": "claim",
-            "task_id": task_id, "pane": pane,
-        })
+        sse_broadcast(
+            {
+                "topic": f"board:{board_id}",
+                "tag": "claim",
+                "task_id": task_id,
+                "pane": pane,
+            }
+        )
 
         return {"ok": True, "task_id": task_id}
 
-    # Claim failed — read who claimed it
-    raw = await redis.hget(ck, task_id)
-    claimed_by = ""
-    if raw:
-        try:
-            claimed_by = json.loads(raw).get("pane", "")
-        except (json.JSONDecodeError, TypeError):
-            pass
+    # Conflict — result is the current holder JSON
+    try:
+        holder = json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        holder = {"pane": result}
 
-    return {"ok": False, "reason": "already_claimed", "claimed_by": claimed_by}
+    return {"ok": False, "reason": "already_claimed", "holder": holder}
 
 
 @board_router.post("/api/board/{board_id}/drop")
@@ -184,11 +183,17 @@ async def drop_task(request: Request, board_id: str, _=Depends(require_auth)):
         }
         await redis.xadd(sk, entry, maxlen=config.max_stream_len, approximate=True)
 
-        sse_broadcast({
-            "topic": f"board:{board_id}", "tag": "drop",
-            "task_id": task_id, "pane": pane,
-        })
+        sse_broadcast(
+            {
+                "topic": f"board:{board_id}",
+                "tag": "drop",
+                "task_id": task_id,
+                "pane": pane,
+            }
+        )
 
         return {"ok": True, "task_id": task_id}
 
-    return {"ok": False, "reason": "not_claimed_by_you"}
+    if result == -1:
+        return {"ok": False, "reason": "not_claimed"}
+    return {"ok": False, "reason": "not_holder"}

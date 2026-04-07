@@ -5,24 +5,29 @@
 # ARGV[1] = task_id
 # ARGV[2] = pane_id
 # ARGV[3] = epoch timestamp
-# Returns: 1 = success, 0 = already claimed
+# ARGV[4] = ttl_seconds (for EXPIRE on first claim)
+# Returns: nil = success, holder JSON string = conflict
 CLAIM_TASK_LUA = """
-local existing = redis.call('HGET', KEYS[1], ARGV[1])
-if existing then return 0 end
+if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 1 then
+    return redis.call('HGET', KEYS[1], ARGV[1])
+end
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode({
     pane = ARGV[2], claimed_at = tonumber(ARGV[3])
 }))
-return 1
+if redis.call('TTL', KEYS[1]) == -1 then
+    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
+end
+return nil
 """
 
 # drop_task: Release a claimed task (only the claimer can drop).
 # KEYS[1] = ws:board:claims:{board_id}
 # ARGV[1] = task_id
 # ARGV[2] = pane_id (must match current claimer)
-# Returns: 1 = success, 0 = not claimed or wrong pane
+# Returns: 1 = success, 0 = not yours, -1 = not claimed
 DROP_TASK_LUA = """
 local raw = redis.call('HGET', KEYS[1], ARGV[1])
-if not raw then return 0 end
+if not raw then return -1 end
 local data = cjson.decode(raw)
 if data.pane ~= ARGV[2] then return 0 end
 redis.call('HDEL', KEYS[1], ARGV[1])
