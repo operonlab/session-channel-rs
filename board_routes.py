@@ -124,17 +124,8 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
     result = await redis.evalsha(_claim_sha, 1, ck, task_id, pane, now, ttl)
 
     if result is None:
-        # Success — nil return means no prior holder
-        sk = _stream_key(board_id)
-        entry = {
-            "sender": pane,
-            "text": json.dumps({"task_id": task_id}),
-            "tag": "claim",
-            "priority": "normal",
-        }
-        await redis.xadd(sk, entry, maxlen=config.max_stream_len, approximate=True)
-        await redis.sadd(config.topics_key, f"board:{board_id}")
-
+        # Success — broadcast via SSE only (no XADD; projection uses
+        # the claims hash as authority, not stream claim events)
         sse_broadcast(
             {
                 "topic": f"board:{board_id}",
@@ -173,16 +164,7 @@ async def drop_task(request: Request, board_id: str, _=Depends(require_auth)):
     result = await redis.evalsha(_drop_sha, 1, ck, task_id, pane)
 
     if result == 1:
-        # Write drop event to stream
-        sk = _stream_key(board_id)
-        entry = {
-            "sender": pane,
-            "text": json.dumps({"task_id": task_id}),
-            "tag": "drop",
-            "priority": "normal",
-        }
-        await redis.xadd(sk, entry, maxlen=config.max_stream_len, approximate=True)
-
+        # Broadcast via SSE only (no XADD; projection uses claims hash)
         sse_broadcast(
             {
                 "topic": f"board:{board_id}",
