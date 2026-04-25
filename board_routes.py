@@ -285,9 +285,30 @@ async def _build_projection_inner(redis, board_id: str) -> dict:
             # Best-effort: a Redis hiccup must not break the projection.
             continue
 
-    # 5. Convert TaskClass enum to string for JSON serialization
-    task_list: list[dict[str, Any]] = []
+    # 5. Dedupe by logical_id — DAG unblock and cap/assignment retries can
+    # produce multiple stream entries for the same logical task. The user
+    # mental model is one task per logical_id, so collapse stale entries
+    # using a status-priority + recency rule:
+    #   done > claimed > blocked > open
+    # Within the same priority, the latest msg_id wins.
+    _STATUS_RANK = {"done": 4, "claimed": 3, "blocked": 2, "open": 1}
+    deduped: dict[str, dict[str, Any]] = {}
     for task in tasks.values():
+        logical_id = task.get("logical_id") or task.get("id", "")
+        # Tasks without logical_id (defensive) keep msg_id as their key so
+        # they don't collide.
+        key = logical_id if logical_id else task["id"]
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = task
+            continue
+        new_rank = _STATUS_RANK.get(task["status"], 0)
+        old_rank = _STATUS_RANK.get(existing["status"], 0)
+        if new_rank > old_rank or (new_rank == old_rank and task["id"] > existing["id"]):
+            deduped[key] = task
+
+    task_list: list[dict[str, Any]] = []
+    for task in deduped.values():
         item = dict(task)
         if isinstance(item.get("task_class"), TaskClass):
             item["task_class"] = item["task_class"].value
