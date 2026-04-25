@@ -11,6 +11,7 @@ import redis.asyncio as aioredis
 from board_routes import board_router
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from pane_routes import pane_router
 from starlette.middleware.cors import CORSMiddleware
 
 from config import config
@@ -132,6 +133,7 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(board_router)
+app.include_router(pane_router)
 
 
 @app.get("/", response_class=HTMLResponse)
