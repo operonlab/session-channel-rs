@@ -51,6 +51,132 @@ async def _trim_loop(r: aioredis.Redis) -> None:
             await asyncio.sleep(10)
 
 
+async def _reaper_loop(r: aioredis.Redis) -> None:
+    """Background reaper: XAUTOCLAIM idle > lease pending entries, then re-publish.
+
+    For each board topic, run XAUTOCLAIM per task_class bucket using its
+    class-specific min_idle_time. Reaped publish entries are XACK'd and re-XADD'd
+    with incremented retry_count. Entries exceeding retry > 3 are moved to a
+    dead-letter stream (W4-C). Non-publish tags (done/drop/heartbeat) are
+    just XACK'd to drain them from the PEL.
+    """
+    # Lazy import to avoid circular dependency at module load time
+    from board_routes import _ensure_group, _group_key, _stream_key
+    from schemas import TaskClass, lease_ms_for_class
+
+    last_seen_ids: dict[str, str] = {}  # per (stream, class) cursor for XAUTOCLAIM
+
+    while True:
+        try:
+            await asyncio.sleep(5)
+            topics = await r.smembers(config.topics_key)
+            board_topics = [t for t in topics if t.startswith("board:")]
+
+            for topic in board_topics:
+                board_id = topic.removeprefix("board:")
+                sk = _stream_key(board_id)
+                gk = _group_key(board_id)
+
+                try:
+                    await _ensure_group(r, board_id)
+                except Exception:
+                    continue
+
+                # Sweep by task_class — each class has its own lease budget
+                for tc in TaskClass:
+                    min_idle = lease_ms_for_class(tc)
+                    cursor_key = f"{sk}:{tc.value}"
+                    cursor = last_seen_ids.get(cursor_key, "0-0")
+
+                    try:
+                        # Returns (next_cursor, claimed_entries, deleted_ids)
+                        next_cursor, claimed, _deleted = await r.xautoclaim(
+                            sk,
+                            gk,
+                            "__reaper",
+                            min_idle_time=min_idle,
+                            start_id=cursor,
+                            count=100,
+                        )
+                        last_seen_ids[cursor_key] = next_cursor or "0-0"
+                    except Exception:
+                        logger.exception("xautoclaim_error")
+                        continue
+
+                    for msg_id, fields in claimed:
+                        tag = fields.get("tag", "")
+                        msg_class = fields.get("task_class", TaskClass.SHORT.value)
+
+                        # Only handle entries belonging to this class bucket;
+                        # others get re-encountered when their bucket runs.
+                        # Entries without task_class default to SHORT.
+                        if tag == "publish" and msg_class != tc.value:
+                            continue
+
+                        if tag != "publish":
+                            # done / drop / heartbeat / etc. — drain from PEL.
+                            try:
+                                await r.xack(sk, gk, msg_id)
+                            except Exception:
+                                logger.exception("xack_drain_error")
+                            continue
+
+                        # publish entry — re-deliver via XACK + XADD
+                        retry_count = int(fields.get("retry_count", "0") or "0") + 1
+                        new_fields = {
+                            **fields,
+                            "tag": "publish",
+                            "retry_count": str(retry_count),
+                        }
+
+                        # W4-C dead-letter on retry > 3
+                        if retry_count > 3:
+                            try:
+                                dl_key = f"{config.stream_prefix}board:{board_id}:failed"
+                                await r.xadd(dl_key, new_fields)
+                                await r.xack(sk, gk, msg_id)
+                            except Exception:
+                                logger.exception("dead_letter_error")
+                                continue
+                            sse_broadcast(
+                                {
+                                    "topic": f"board:{board_id}",
+                                    "tag": "failed",
+                                    "task_id": msg_id,
+                                    "retry_count": retry_count,
+                                }
+                            )
+                            continue
+
+                        # Re-publish: XACK old + XADD new
+                        try:
+                            await r.xack(sk, gk, msg_id)
+                            new_id = await r.xadd(
+                                sk,
+                                new_fields,
+                                maxlen=config.max_stream_len,
+                                approximate=True,
+                            )
+                        except Exception:
+                            logger.exception("reaper_republish_error")
+                            continue
+
+                        sse_broadcast(
+                            {
+                                "topic": f"board:{board_id}",
+                                "tag": "release",
+                                "task_id": msg_id,
+                                "new_id": new_id,
+                                "retry_count": retry_count,
+                            }
+                        )
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("reaper_loop_error")
+            await asyncio.sleep(5)
+
+
 async def _fanout_loop(r: aioredis.Redis) -> None:
     """Background XREAD loop: read new messages from all streams and push to SSE clients."""
     last_ids: dict[str, str] = {}
@@ -107,12 +233,14 @@ async def lifespan(app: FastAPI):
     # Since send_message already calls sse_broadcast, the fanout loop handles
     # external writes and catch-up on restart.
     fanout_task = asyncio.create_task(_fanout_loop(r))
+    reaper_task = asyncio.create_task(_reaper_loop(r))
 
     yield
 
     trim_task.cancel()
     fanout_task.cancel()
-    await asyncio.gather(trim_task, fanout_task, return_exceptions=True)
+    reaper_task.cancel()
+    await asyncio.gather(trim_task, fanout_task, reaper_task, return_exceptions=True)
     await r.aclose()
     logger.info("shutdown_complete")
 

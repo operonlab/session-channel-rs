@@ -1,35 +1,24 @@
-"""Lua CAS scripts for atomic board task operations."""
+"""DEPRECATED in v2 — Board now uses Redis Streams consumer groups (XREADGROUP/XACK).
 
-# claim_task: Atomically claim a task if not already claimed.
-# KEYS[1] = ws:board:claims:{board_id}
-# ARGV[1] = task_id
-# ARGV[2] = pane_id
-# ARGV[3] = epoch timestamp
-# ARGV[4] = ttl_seconds (for EXPIRE on first claim)
-# Returns: nil = success, holder JSON string = conflict
-CLAIM_TASK_LUA = """
-if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 1 then
-    return redis.call('HGET', KEYS[1], ARGV[1])
-end
-redis.call('HSET', KEYS[1], ARGV[1], cjson.encode({
-    pane = ARGV[2], claimed_at = tonumber(ARGV[3])
-}))
-if redis.call('TTL', KEYS[1]) == -1 then
-    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
-end
-return nil
+The original v1 implementation used a custom Lua CAS over an auxiliary
+``ws:board:claims:{board_id}`` Hash to enforce exactly-once claims. v2 replaces
+this with native Redis Streams consumer-group primitives (XREADGROUP, XACK,
+XCLAIM, XAUTOCLAIM), which are atomic, cluster-safe, and built-in.
+
+This file is kept as a placeholder so that any lingering imports do not break
+during the migration window. It will be removed once BOARD_V2 stabilizes.
 """
 
-# drop_task: Release a claimed task (only the claimer can drop).
-# KEYS[1] = ws:board:claims:{board_id}
-# ARGV[1] = task_id
-# ARGV[2] = pane_id (must match current claimer)
-# Returns: 1 = success, 0 = not yours, -1 = not claimed
-DROP_TASK_LUA = """
-local raw = redis.call('HGET', KEYS[1], ARGV[1])
-if not raw then return -1 end
-local data = cjson.decode(raw)
-if data.pane ~= ARGV[2] then return 0 end
-redis.call('HDEL', KEYS[1], ARGV[1])
-return 1
-"""
+from __future__ import annotations
+
+import warnings
+
+warnings.warn(
+    "board_lua is deprecated; use Streams consumer group APIs in board_routes.py",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+# Empty placeholders for legacy imports — do not use.
+CLAIM_TASK_LUA = ""
+DROP_TASK_LUA = ""
