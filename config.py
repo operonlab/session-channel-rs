@@ -63,6 +63,13 @@ def load_config(path: Path | None = None) -> Config:
         "BOARD_V2",
         raw.get("board_v2", True) if isinstance(raw.get("board_v2", True), bool) else True,
     )
+    # Env override for port — convenient for parallel worktrees / validation
+    port_env = os.environ.get("SESSION_CHANNEL_PORT")
+    if port_env:
+        try:
+            cfg.port = int(port_env)
+        except ValueError:
+            pass
     return cfg
 
 

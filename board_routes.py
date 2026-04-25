@@ -18,8 +18,11 @@ This module replaces the v1 Lua-CAS based implementation in ``board_lua.py``.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any
+
+logger = logging.getLogger("session-channel.board")
 
 from auth import require_auth
 from dag import (
@@ -38,6 +41,7 @@ from metrics import (
 from schemas import (
     LEASE_CONFIG,
     TaskClass,
+    TaskProgress,
     TaskPublish,
     TaskResult,
 )
@@ -389,6 +393,14 @@ async def publish_tasks(request: Request, board_id: str, _=Depends(require_auth)
 
     await _ensure_group(redis, board_id)
 
+    # Register topic so reaper / trim / fanout loops can discover this board.
+    # Without this SADD, reaper_loop's smembers(topics_key) never sees board:*
+    # entries and lease expiration is silently broken.
+    try:
+        await redis.sadd(config.topics_key, f"board:{board_id}")
+    except Exception:
+        logger.exception("topics_key_sadd_failed")
+
     msg_ids: list[str] = []
     for raw in tasks_raw:
         try:
@@ -517,16 +529,26 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
                 continue
 
             # DAG check (W4-B): runs BEFORE assignment + caps checks.
-            # If unmet deps remain, ack + re-publish so the entry stays
-            # latent until ``mark_done_and_unblock`` clears its deps set.
+            # If unmet deps remain, XCLAIM the entry to the special
+            # ``__blocked_holder`` consumer instead of ack+republish.
+            # Holding it in the PEL prevents stream bloat (republish would
+            # accumulate a new entry per claim attempt) while still keeping
+            # the message reachable — ``mark_done_and_unblock`` will XCLAIM
+            # it back to a regular consumer once deps clear.
             logical_id = (fields.get("id") or "").strip()
             if logical_id and await is_blocked(redis, board_id, logical_id):
                 unmet = await get_unmet_deps(redis, board_id, logical_id)
                 try:
-                    await redis.xack(sk, gk, msg_id)
-                    await redis.xadd(sk, fields, maxlen=config.max_stream_len, approximate=True)
+                    await redis.xclaim(
+                        sk,
+                        gk,
+                        "__blocked_holder",
+                        min_idle_time=0,
+                        message_ids=[msg_id],
+                        justid=True,
+                    )
                 except Exception:
-                    pass
+                    logger.exception("blocked_xclaim_failed")
                 rejected_blocked.append((msg_id, unmet))
                 CLAIM_CONFLICT_TOTAL.labels(board_id=board_id, reason="blocked").inc()
                 continue
@@ -744,7 +766,33 @@ async def complete_task(request: Request, board_id: str, _=Depends(require_auth)
             unblocked = await mark_done_and_unblock(redis, board_id, done_logical_id)
         except Exception:
             unblocked = []
+        # Release each newly-unblocked downstream from __blocked_holder PEL
+        # so XREADGROUP can deliver it again to a real consumer.
         for downstream in unblocked:
+            try:
+                downstream_msg_id = await redis.hget(f"ws:board:logical:{board_id}", downstream)
+                if downstream_msg_id:
+                    await redis.xclaim(
+                        sk,
+                        gk,
+                        "__reaper",
+                        min_idle_time=0,
+                        message_ids=[downstream_msg_id],
+                        justid=True,
+                    )
+                    # Reaper loop will republish on next sweep; nudge by also
+                    # XACK + XADD now so it surfaces immediately.
+                    entries_dn = await redis.xrange(
+                        sk, min=downstream_msg_id, max=downstream_msg_id
+                    )
+                    if entries_dn:
+                        _dn_id, dn_fields = entries_dn[0]
+                        await redis.xack(sk, gk, downstream_msg_id)
+                        await redis.xadd(
+                            sk, dn_fields, maxlen=config.max_stream_len, approximate=True
+                        )
+            except Exception:
+                logger.exception("dep_satisfied_release_failed")
             sse_broadcast(
                 {
                     "topic": f"board:{board_id}",
