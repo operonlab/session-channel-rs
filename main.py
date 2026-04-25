@@ -10,7 +10,14 @@ from pathlib import Path
 import redis.asyncio as aioredis
 from board_routes import board_router
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
+from metrics import (
+    CONTENT_TYPE_LATEST,
+    DEAD_LETTER_TOTAL,
+    LEASE_EXPIRED_TOTAL,
+    ORPHAN_RECOVERED_TOTAL,
+    metrics_response_body,
+)
 from pane_routes import pane_router
 from starlette.middleware.cors import CORSMiddleware
 
@@ -121,6 +128,9 @@ async def _reaper_loop(r: aioredis.Redis) -> None:
                                 logger.exception("xack_drain_error")
                             continue
 
+                        # W5-B: orphan recovered (any reaped publish entry)
+                        ORPHAN_RECOVERED_TOTAL.labels(board_id=board_id, task_class=tc.value).inc()
+
                         # publish entry — re-deliver via XACK + XADD
                         retry_count = int(fields.get("retry_count", "0") or "0") + 1
                         new_fields = {
@@ -133,11 +143,26 @@ async def _reaper_loop(r: aioredis.Redis) -> None:
                         if retry_count > 3:
                             try:
                                 dl_key = f"{config.stream_prefix}board:{board_id}:failed"
-                                await r.xadd(dl_key, new_fields)
+                                await r.xadd(
+                                    dl_key,
+                                    new_fields,
+                                    maxlen=config.max_stream_len * 2,
+                                    approximate=True,
+                                )
                                 await r.xack(sk, gk, msg_id)
                             except Exception:
                                 logger.exception("dead_letter_error")
                                 continue
+                            DEAD_LETTER_TOTAL.labels(board_id=board_id, task_class=tc.value).inc()
+                            logger.info(
+                                "dead_letter",
+                                extra={
+                                    "board_id": board_id,
+                                    "task_id": msg_id,
+                                    "task_class": tc.value,
+                                    "retry_count": retry_count,
+                                },
+                            )
                             sse_broadcast(
                                 {
                                     "topic": f"board:{board_id}",
@@ -160,6 +185,19 @@ async def _reaper_loop(r: aioredis.Redis) -> None:
                         except Exception:
                             logger.exception("reaper_republish_error")
                             continue
+
+                        # W5-B: lease expired & recycled (retry < 3 republish)
+                        LEASE_EXPIRED_TOTAL.labels(board_id=board_id, task_class=tc.value).inc()
+                        logger.info(
+                            "lease_expired",
+                            extra={
+                                "board_id": board_id,
+                                "task_id": msg_id,
+                                "new_id": new_id,
+                                "task_class": tc.value,
+                                "retry_count": retry_count,
+                            },
+                        )
 
                         sse_broadcast(
                             {
@@ -262,6 +300,12 @@ app.add_middleware(
 app.include_router(router)
 app.include_router(board_router)
 app.include_router(pane_router)
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint():
+    """Prometheus scrape endpoint (W5-B)."""
+    return Response(content=metrics_response_body(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/", response_class=HTMLResponse)

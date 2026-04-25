@@ -22,7 +22,19 @@ import time
 from typing import Any
 
 from auth import require_auth
+from dag import (
+    get_unmet_deps,
+    is_blocked,
+    mark_done_and_unblock,
+    register_task,
+)
 from fastapi import APIRouter, Depends, HTTPException, Request
+from metrics import (
+    CLAIM_CONFLICT_TOTAL,
+    HEARTBEAT_LATENCY_MS,
+    PROJECTION_MS,
+    XREAD_LAG_MS,
+)
 from schemas import (
     LEASE_CONFIG,
     TaskClass,
@@ -101,6 +113,7 @@ def _decode_publish_fields(fields: dict[str, str]) -> dict[str, Any]:
         "desc": fields.get("desc", ""),
         "task_class": task_class,
         "required_caps": required_caps,
+        "assigned_to": fields.get("assigned_to", "") or "",
         "priority": fields.get("priority", "normal"),
         "sender": fields.get("sender", ""),
     }
@@ -134,6 +147,12 @@ async def _build_projection(redis, board_id: str) -> dict:
       4. ``lease_until`` is computed from ``idle_ms`` against the per-class
          lease budget so the UI can render a countdown.
     """
+    with PROJECTION_MS.labels(board_id=board_id).time():
+        return await _build_projection_inner(redis, board_id)
+
+
+async def _build_projection_inner(redis, board_id: str) -> dict:
+    """Inner projection (instrumented by ``_build_projection``)."""
     sk = _stream_key(board_id)
     gk = _group_key(board_id)
 
@@ -193,6 +212,7 @@ async def _build_projection(redis, board_id: str) -> dict:
                 "delivery_count": 0,
                 "lease_until": None,
                 "required_caps": decoded["required_caps"],
+                "assigned_to": decoded["assigned_to"] or None,
             }
         elif tag == "done":
             tid = fields.get("task_id", "")
@@ -243,6 +263,24 @@ async def _build_projection(redis, board_id: str) -> dict:
         if tid in progress_events:
             task["progress"] = progress_events[tid]
 
+    # 4b. W4-B: open tasks with unmet deps surface as ``blocked``.
+    # Done/claimed tasks are not re-evaluated — once claimed, the DAG check
+    # has already been bypassed (or the task was never blocked to begin
+    # with). Only ``open`` matters for UI gating.
+    for task in tasks.values():
+        if task["status"] != "open":
+            continue
+        logical_id = task.get("logical_id") or ""
+        if not logical_id:
+            continue
+        try:
+            if await is_blocked(redis, board_id, logical_id):
+                task["status"] = "blocked"
+                task["unmet_deps"] = await get_unmet_deps(redis, board_id, logical_id)
+        except Exception:
+            # Best-effort: a Redis hiccup must not break the projection.
+            continue
+
     # 5. Convert TaskClass enum to string for JSON serialization
     task_list: list[dict[str, Any]] = []
     for task in tasks.values():
@@ -252,19 +290,59 @@ async def _build_projection(redis, board_id: str) -> dict:
         task_list.append(item)
     task_list.sort(key=lambda t: t["id"])
 
+    # 5b. W4-C: overlay dead-letter (failed) tasks from the failed stream.
+    # Reaper promotes entries that exceed retry > 3 here; surfacing them in
+    # the projection lets the UI distinguish persistent failures from
+    # transient retries.
+    failed_stream = f"{config.stream_prefix}board:{board_id}:failed"
+    try:
+        failed_entries = await redis.xrange(failed_stream)
+    except Exception:
+        failed_entries = []
+
+    failed_tasks: list[dict[str, Any]] = []
+    total_failed_retry = 0
+    for fmsg_id, ffields in failed_entries:
+        try:
+            retry_count = int(ffields.get("retry_count", "0") or "0")
+        except (TypeError, ValueError):
+            retry_count = 0
+        total_failed_retry += retry_count
+        failed_tasks.append(
+            {
+                "id": fmsg_id,
+                "logical_id": ffields.get("id", ""),
+                "desc": ffields.get("desc", ""),
+                "task_class": ffields.get("task_class", TaskClass.SHORT.value),
+                "retry_count": retry_count,
+                "status": "failed",
+                "failed_at": _msg_id_to_timestamp(fmsg_id),
+                "original_sender": ffields.get("sender", ""),
+                "assigned_to": ffields.get("assigned_to", "") or None,
+            }
+        )
+
     summary = {
         "total": len(task_list),
         "open": sum(1 for t in task_list if t["status"] == "open"),
         "claimed": sum(1 for t in task_list if t["status"] == "claimed"),
         "done": sum(1 for t in task_list if t["status"] == "done"),
+        "blocked": sum(1 for t in task_list if t["status"] == "blocked"),
+        "failed": len(failed_tasks),
         "with_progress": sum(1 for t in task_list if t.get("progress")),
         "with_result": sum(1 for t in task_list if t.get("result")),
         "total_tokens": sum(
             int((t.get("result") or {}).get("tokens_used") or 0) for t in task_list
         ),
+        "total_retry_count": total_failed_retry,
     }
 
-    return {"board_id": board_id, "tasks": task_list, "summary": summary}
+    return {
+        "board_id": board_id,
+        "tasks": task_list,
+        "failed_tasks": failed_tasks,
+        "summary": summary,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -277,7 +355,7 @@ async def get_board(request: Request, board_id: str, _=Depends(require_auth)):
     """Read-only projection: stream messages + pending summary → board state."""
     redis = request.app.state.redis
     projection = await _build_projection(redis, board_id)
-    if not projection["tasks"]:
+    if not projection["tasks"] and not projection.get("failed_tasks"):
         raise HTTPException(status_code=404, detail=f"Board '{board_id}' not found or empty")
     return projection
 
@@ -319,6 +397,18 @@ async def publish_tasks(request: Request, board_id: str, _=Depends(require_auth)
             raise HTTPException(status_code=400, detail=f"invalid task: {exc}") from exc
         msg_id = await redis.xadd(sk, fields, maxlen=config.max_stream_len, approximate=True)
         msg_ids.append(msg_id)
+
+        # W4-B: record DAG state so blocked tasks can be filtered at claim
+        # time. We re-derive logical_id / depends_on from the raw dict —
+        # the encoded fields are already JSON strings.
+        logical_id = (fields.get("id") or "").strip()
+        try:
+            deps = json.loads(fields.get("depends_on") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            deps = []
+        if not isinstance(deps, list):
+            deps = []
+        await register_task(redis, board_id, logical_id, msg_id, deps)
 
     sse_broadcast(
         {
@@ -374,6 +464,11 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
     if not pane:
         raise HTTPException(status_code=400, detail="pane required")
 
+    logger.info(
+        "claim_request",
+        extra={"board_id": board_id, "pane": pane, "count": count},
+    )
+
     redis = request.app.state.redis
     sk = _stream_key(board_id)
     gk = _group_key(board_id)
@@ -397,16 +492,20 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
     pane_caps_set: set[str] = set(pane_mcps) | set(pane_skills)
 
     # 2. XREADGROUP returns: [(stream_name, [(msg_id, {field: value, ...}), ...])]
+    _xread_t0 = time.perf_counter()
     try:
         result = await redis.xreadgroup(gk, pane, {sk: ">"}, count=count, block=0)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"xreadgroup failed: {e}") from e
+    XREAD_LAG_MS.labels(board_id=board_id).observe((time.perf_counter() - _xread_t0) * 1000)
 
     if not result:
         return {"ok": False, "reason": "no_tasks"}
 
     claimed: list[dict[str, Any]] = []
     rejected: list[tuple[str, list[str]]] = []  # (msg_id, missing_caps)
+    rejected_assignment: list[tuple[str, str]] = []  # (msg_id, assigned_to)
+    rejected_blocked: list[tuple[str, list[str]]] = []  # (msg_id, unmet_deps)
 
     for _stream_name, entries in result:
         for msg_id, fields in entries:
@@ -415,6 +514,35 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
                 # Defensive: only publish entries should reach the consumer
                 # group, but ack anything else to drain the PEL.
                 await redis.xack(sk, gk, msg_id)
+                continue
+
+            # DAG check (W4-B): runs BEFORE assignment + caps checks.
+            # If unmet deps remain, ack + re-publish so the entry stays
+            # latent until ``mark_done_and_unblock`` clears its deps set.
+            logical_id = (fields.get("id") or "").strip()
+            if logical_id and await is_blocked(redis, board_id, logical_id):
+                unmet = await get_unmet_deps(redis, board_id, logical_id)
+                try:
+                    await redis.xack(sk, gk, msg_id)
+                    await redis.xadd(sk, fields, maxlen=config.max_stream_len, approximate=True)
+                except Exception:
+                    pass
+                rejected_blocked.append((msg_id, unmet))
+                CLAIM_CONFLICT_TOTAL.labels(board_id=board_id, reason="blocked").inc()
+                continue
+
+            # Assignment check (W4-A): runs BEFORE caps check.
+            # Empty assigned_to → public task, fall through to caps logic.
+            # Non-empty + mismatch → ack + redo + SSE assignment_rejected.
+            assigned = (fields.get("assigned_to") or "").strip()
+            if assigned and assigned != pane:
+                try:
+                    await redis.xack(sk, gk, msg_id)
+                    await redis.xadd(sk, fields, maxlen=config.max_stream_len, approximate=True)
+                except Exception:
+                    pass
+                rejected_assignment.append((msg_id, assigned))
+                CLAIM_CONFLICT_TOTAL.labels(board_id=board_id, reason="assignment_mismatch").inc()
                 continue
 
             try:
@@ -437,6 +565,7 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
                     # the reaper loop will eventually recover it.
                     pass
                 rejected.append((msg_id, missing))
+                CLAIM_CONFLICT_TOTAL.labels(board_id=board_id, reason="caps_mismatch").inc()
                 continue
 
             decoded = _decode_publish_fields(fields)
@@ -472,18 +601,63 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
                 "missing_caps": missing,
             }
         )
+    for msg_id, assigned in rejected_assignment:
+        sse_broadcast(
+            {
+                "topic": f"board:{board_id}",
+                "tag": "assignment_rejected",
+                "task_id": msg_id,
+                "pane": pane,
+                "assigned_to": assigned,
+            }
+        )
+    for msg_id, unmet in rejected_blocked:
+        sse_broadcast(
+            {
+                "topic": f"board:{board_id}",
+                "tag": "blocked",
+                "task_id": msg_id,
+                "pane": pane,
+                "unmet_deps": unmet,
+            }
+        )
 
+    if not claimed and rejected_blocked:
+        return {
+            "ok": False,
+            "reason": "blocked",
+            "unmet_deps": rejected_blocked[0][1],
+            "rejected_count": len(rejected),
+            "rejected_assignment_count": len(rejected_assignment),
+            "rejected_blocked_count": len(rejected_blocked),
+        }
+    if not claimed and rejected_assignment:
+        return {
+            "ok": False,
+            "reason": "assignment_mismatch",
+            "rejected_count": len(rejected),
+            "rejected_assignment_count": len(rejected_assignment),
+            "rejected_blocked_count": len(rejected_blocked),
+        }
     if not claimed and rejected:
         return {
             "ok": False,
             "reason": "caps_mismatch",
             "missing_caps": rejected[0][1],
             "rejected_count": len(rejected),
+            "rejected_assignment_count": len(rejected_assignment),
+            "rejected_blocked_count": len(rejected_blocked),
         }
     if not claimed:
         return {"ok": False, "reason": "no_tasks"}
 
-    return {"ok": True, "tasks": claimed, "rejected_count": len(rejected)}
+    return {
+        "ok": True,
+        "tasks": claimed,
+        "rejected_count": len(rejected),
+        "rejected_assignment_count": len(rejected_assignment),
+        "rejected_blocked_count": len(rejected_blocked),
+    }
 
 
 @board_router.post("/api/board/{board_id}/complete")
@@ -549,7 +723,44 @@ async def complete_task(request: Request, board_id: str, _=Depends(require_auth)
         }
     )
 
-    return {"ok": True, "task_id": task_id, "acked": int(acked or 0), "done_event": done_msg_id}
+    # 3. W4-B: resolve task_id (msg_id) → logical_id and unblock downstream.
+    # The deps map is keyed by logical id (the caller-provided ``id`` field
+    # on TaskPublish), so we need to look up the publish entry from the
+    # stream to recover it.
+    unblocked: list[str] = []
+    try:
+        entries = await redis.xrange(sk, min=task_id, max=task_id)
+    except Exception:
+        entries = []
+    done_logical_id = ""
+    if entries:
+        try:
+            _id, fields = entries[0]
+            done_logical_id = (fields.get("id") or "").strip()
+        except (TypeError, ValueError, AttributeError):
+            done_logical_id = ""
+    if done_logical_id:
+        try:
+            unblocked = await mark_done_and_unblock(redis, board_id, done_logical_id)
+        except Exception:
+            unblocked = []
+        for downstream in unblocked:
+            sse_broadcast(
+                {
+                    "topic": f"board:{board_id}",
+                    "tag": "dep_satisfied",
+                    "logical_id": downstream,
+                    "completed": done_logical_id,
+                }
+            )
+
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "acked": int(acked or 0),
+        "done_event": done_msg_id,
+        "unblocked": unblocked,
+    }
 
 
 @board_router.post("/api/board/{board_id}/drop")
@@ -619,12 +830,14 @@ async def heartbeat_task(request: Request, board_id: str, _=Depends(require_auth
 
     await _ensure_group(redis, board_id)
 
+    _hb_t0 = time.perf_counter()
     try:
         result = await redis.xclaim(
             sk, gk, pane, min_idle_time=0, message_ids=[task_id], justid=True
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"heartbeat failed: {e}") from e
+    HEARTBEAT_LATENCY_MS.labels(board_id=board_id).observe((time.perf_counter() - _hb_t0) * 1000)
 
     if not result:
         return {"ok": False, "reason": "not_pending_or_not_holder"}
@@ -741,6 +954,44 @@ async def get_pending(
         )
 
     return {"board_id": board_id, "pending": out, "count": len(out)}
+
+
+@board_router.get("/api/board/{board_id}/failed")
+async def list_failed(request: Request, board_id: str, _=Depends(require_auth)):
+    """List dead-letter entries (tasks promoted after retry > 3).
+
+    Reads ``ws:channel:board:{board_id}:failed`` written by the W2-B reaper
+    when an entry's retry_count exceeds 3. ``failed_at`` is derived from the
+    dead-letter msg_id timestamp (i.e. when the reaper promoted it, not when
+    the original task was first published).
+    """
+    redis = request.app.state.redis
+    failed_stream = f"{config.stream_prefix}board:{board_id}:failed"
+    try:
+        raw = await redis.xrange(failed_stream)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"xrange failed: {e}") from e
+
+    items: list[dict[str, Any]] = []
+    for msg_id, fields in raw:
+        try:
+            retry_count = int(fields.get("retry_count", "0") or "0")
+        except (TypeError, ValueError):
+            retry_count = 0
+        items.append(
+            {
+                "id": msg_id,
+                "logical_id": fields.get("id", ""),
+                "desc": fields.get("desc", ""),
+                "task_class": fields.get("task_class", "short"),
+                "retry_count": retry_count,
+                "failed_at": _msg_id_to_timestamp(msg_id),
+                "original_sender": fields.get("sender", ""),
+                "assigned_to": fields.get("assigned_to", "") or "",
+            }
+        )
+
+    return {"board_id": board_id, "failed": items, "count": len(items)}
 
 
 @board_router.get("/api/panes/{pane_id}/pending")
