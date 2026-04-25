@@ -106,6 +106,14 @@ def _decode_publish_fields(fields: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def _msg_id_to_timestamp(msg_id: str) -> int:
+    """Stream msg_id format: '<ms>-<seq>'. Return ms epoch (0 on failure)."""
+    try:
+        return int(msg_id.split("-")[0])
+    except (ValueError, IndexError, AttributeError):
+        return 0
+
+
 # --------------------------------------------------------------------------- #
 # Projection                                                                   #
 # --------------------------------------------------------------------------- #
@@ -166,6 +174,7 @@ async def _build_projection(redis, board_id: str) -> dict:
     # 3. Walk stream events
     tasks: dict[str, dict[str, Any]] = {}
     done_events: dict[str, dict[str, Any]] = {}
+    progress_events: dict[str, dict[str, Any]] = {}
     for msg_id, fields in raw_msgs:
         tag = fields.get("tag", "")
         if tag == "publish":
@@ -179,6 +188,7 @@ async def _build_projection(redis, board_id: str) -> dict:
                 "status": "open",
                 "claimed_by": None,
                 "done_by": None,
+                "progress": None,
                 "result": None,
                 "delivery_count": 0,
                 "lease_until": None,
@@ -193,6 +203,21 @@ async def _build_projection(redis, board_id: str) -> dict:
             done_events[tid] = {
                 "done_by": fields.get("done_by", ""),
                 "result": result_payload,
+            }
+        elif tag == "progress":
+            tid = fields.get("task_id", "")
+            if not tid:
+                continue
+            try:
+                percent = int(fields.get("percent", "0"))
+            except (TypeError, ValueError):
+                percent = 0
+            # Last-write-wins: stream order is monotonic, so plain assignment works.
+            progress_events[tid] = {
+                "percent": percent,
+                "stage": fields.get("stage", ""),
+                "note": fields.get("note", ""),
+                "last_seen": _msg_id_to_timestamp(msg_id),
             }
 
     now_ms = int(time.time() * 1000)
@@ -214,6 +239,9 @@ async def _build_projection(redis, board_id: str) -> dict:
             lease_seconds = LEASE_CONFIG[task["task_class"]]["lease_seconds"]
             lease_remaining_ms = max(lease_seconds * 1000 - p["idle_ms"], 0)
             task["lease_until"] = (now_ms + lease_remaining_ms) // 1000
+        # Progress overlay applies to any status (claimed mid-flight or done after report)
+        if tid in progress_events:
+            task["progress"] = progress_events[tid]
 
     # 5. Convert TaskClass enum to string for JSON serialization
     task_list: list[dict[str, Any]] = []
@@ -229,6 +257,11 @@ async def _build_projection(redis, board_id: str) -> dict:
         "open": sum(1 for t in task_list if t["status"] == "open"),
         "claimed": sum(1 for t in task_list if t["status"] == "claimed"),
         "done": sum(1 for t in task_list if t["status"] == "done"),
+        "with_progress": sum(1 for t in task_list if t.get("progress")),
+        "with_result": sum(1 for t in task_list if t.get("result")),
+        "total_tokens": sum(
+            int((t.get("result") or {}).get("tokens_used") or 0) for t in task_list
+        ),
     }
 
     return {"board_id": board_id, "tasks": task_list, "summary": summary}
@@ -302,22 +335,33 @@ async def publish_tasks(request: Request, board_id: str, _=Depends(require_auth)
 
 @board_router.post("/api/board/{board_id}/claim")
 async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
-    """Atomically claim up to ``count`` tasks via XREADGROUP.
+    """Atomically claim up to ``count`` tasks via XREADGROUP, with cap check.
 
     Body::
 
         {"pane": "pane:foo", "count": 1}
 
-    Returns either::
+    Capability-aware claim (W3-B):
+      1. Look up pane caps from ``ws:panes:{pane}`` (mcps + skills union).
+      2. XREADGROUP delivers candidate entries.
+      3. For each entry, compare ``required_caps`` against the pane's set.
+         Mismatches are XACKed (cleared from the PEL) and the publish
+         payload is XADDed back so another pane can claim them. SSE
+         broadcasts a ``cap_rejected`` event.
+      4. Only matching entries are returned to the caller.
 
-        {"ok": True, "tasks": [{...}]}
+    Note: a pane that never advertised has ``pane_caps_set = set()``; any
+    task with non-empty ``required_caps`` will therefore be rejected. Tasks
+    with empty ``required_caps`` are always acceptable.
 
-    or::
+    Returns::
 
+        {"ok": True, "tasks": [{...}], "rejected_count": N}
+
+    or when nothing matches::
+
+        {"ok": False, "reason": "caps_mismatch", "missing_caps": [...], "rejected_count": N}
         {"ok": False, "reason": "no_tasks"}
-
-    The returned ``id`` field is the stream message id and serves as the
-    canonical task id for subsequent complete/drop calls.
     """
     body = await request.json()
     pane = (body.get("pane") or "").strip()
@@ -336,7 +380,23 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
 
     await _ensure_group(redis, board_id)
 
-    # XREADGROUP returns: [(stream_name, [(msg_id, {field: value, ...}), ...])]
+    # 1. Look up pane caps (mcps + skills union)
+    pane_caps_key = f"ws:panes:{pane}"
+    try:
+        raw_caps = await redis.hgetall(pane_caps_key)
+    except Exception:
+        raw_caps = {}
+    try:
+        pane_mcps = json.loads(raw_caps.get("mcps", "[]")) if raw_caps else []
+    except (json.JSONDecodeError, TypeError):
+        pane_mcps = []
+    try:
+        pane_skills = json.loads(raw_caps.get("skills", "[]")) if raw_caps else []
+    except (json.JSONDecodeError, TypeError):
+        pane_skills = []
+    pane_caps_set: set[str] = set(pane_mcps) | set(pane_skills)
+
+    # 2. XREADGROUP returns: [(stream_name, [(msg_id, {field: value, ...}), ...])]
     try:
         result = await redis.xreadgroup(gk, pane, {sk: ">"}, count=count, block=0)
     except Exception as e:
@@ -346,8 +406,39 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
         return {"ok": False, "reason": "no_tasks"}
 
     claimed: list[dict[str, Any]] = []
+    rejected: list[tuple[str, list[str]]] = []  # (msg_id, missing_caps)
+
     for _stream_name, entries in result:
         for msg_id, fields in entries:
+            tag = fields.get("tag", "")
+            if tag != "publish":
+                # Defensive: only publish entries should reach the consumer
+                # group, but ack anything else to drain the PEL.
+                await redis.xack(sk, gk, msg_id)
+                continue
+
+            try:
+                required = json.loads(fields.get("required_caps") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                required = []
+            if not isinstance(required, list):
+                required = []
+
+            missing = [c for c in required if c not in pane_caps_set]
+            if missing:
+                # Cap mismatch: ack original entry (clears PEL) + re-publish
+                # the same payload so another pane can claim it. We do NOT
+                # bump any retry counter — this is not a worker failure.
+                try:
+                    await redis.xack(sk, gk, msg_id)
+                    await redis.xadd(sk, fields, maxlen=config.max_stream_len, approximate=True)
+                except Exception:
+                    # Best-effort: if redo fails, the entry stays in PEL and
+                    # the reaper loop will eventually recover it.
+                    pass
+                rejected.append((msg_id, missing))
+                continue
+
             decoded = _decode_publish_fields(fields)
             claimed.append(
                 {
@@ -361,19 +452,38 @@ async def claim_task(request: Request, board_id: str, _=Depends(require_auth)):
                 }
             )
 
+    # SSE: claim success + cap_rejected events
+    if claimed:
+        sse_broadcast(
+            {
+                "topic": f"board:{board_id}",
+                "tag": "claim",
+                "pane": pane,
+                "task_ids": [t["id"] for t in claimed],
+            }
+        )
+    for msg_id, missing in rejected:
+        sse_broadcast(
+            {
+                "topic": f"board:{board_id}",
+                "tag": "cap_rejected",
+                "task_id": msg_id,
+                "pane": pane,
+                "missing_caps": missing,
+            }
+        )
+
+    if not claimed and rejected:
+        return {
+            "ok": False,
+            "reason": "caps_mismatch",
+            "missing_caps": rejected[0][1],
+            "rejected_count": len(rejected),
+        }
     if not claimed:
         return {"ok": False, "reason": "no_tasks"}
 
-    sse_broadcast(
-        {
-            "topic": f"board:{board_id}",
-            "tag": "claim",
-            "pane": pane,
-            "task_ids": [t["id"] for t in claimed],
-        }
-    )
-
-    return {"ok": True, "tasks": claimed}
+    return {"ok": True, "tasks": claimed, "rejected_count": len(rejected)}
 
 
 @board_router.post("/api/board/{board_id}/complete")
@@ -387,15 +497,25 @@ async def complete_task(request: Request, board_id: str, _=Depends(require_auth)
     body = await request.json()
     task_id = (body.get("task_id") or "").strip()
     pane = (body.get("pane") or "").strip()
-    result_raw = body.get("result") or {}
+    result_raw = body.get("result")
+    if result_raw is None:
+        result_raw = {}
 
     if not task_id or not pane:
         raise HTTPException(status_code=400, detail="task_id and pane required")
 
+    # Backward compat: accept legacy str result by wrapping into payload.note
+    if isinstance(result_raw, str):
+        result_raw = {"status": "ok", "payload": {"note": result_raw}}
+    if not isinstance(result_raw, dict):
+        raise HTTPException(
+            status_code=400, detail="invalid result schema: must be object or string"
+        )
+
     try:
         result = TaskResult(**result_raw)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"invalid result: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"invalid result schema: {exc}") from exc
 
     redis = request.app.state.redis
     sk = _stream_key(board_id)
@@ -519,6 +639,53 @@ async def heartbeat_task(request: Request, board_id: str, _=Depends(require_auth
     )
 
     return {"ok": True, "task_id": task_id}
+
+
+@board_router.post("/api/board/{board_id}/progress")
+async def report_progress(request: Request, board_id: str, _=Depends(require_auth)):
+    """Report task progress between claim and complete.
+
+    Body::
+
+        {"pane": "pane:foo", "task_id": "...", "percent": 42,
+         "stage": "embedding", "note": "rows 4200/10000"}
+
+    XADDs a ``tag=progress`` event so the projection enriches the task with
+    a ``progress`` block (percent / stage / note / last_seen). Does NOT touch
+    the consumer-group PEL — for lease refresh use ``/heartbeat`` instead.
+    """
+    body = await request.json()
+    pane = (body.get("pane") or "").strip()
+    if not pane:
+        raise HTTPException(status_code=400, detail="pane required")
+
+    try:
+        prog = TaskProgress(**body)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid progress: {exc}") from exc
+
+    redis = request.app.state.redis
+    sk = _stream_key(board_id)
+
+    fields = {
+        "tag": "progress",
+        "task_id": prog.task_id,
+        "percent": str(prog.percent),
+        "stage": prog.stage,
+        "note": prog.note,
+        "sender": pane,
+    }
+    msg_id = await redis.xadd(sk, fields, maxlen=config.max_stream_len, approximate=True)
+
+    sse_broadcast(
+        {
+            "id": msg_id,
+            "topic": f"board:{board_id}",
+            **fields,
+        }
+    )
+
+    return {"ok": True, "id": msg_id, "task_id": prog.task_id}
 
 
 @board_router.get("/api/board/{board_id}/pending")

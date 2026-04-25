@@ -148,15 +148,47 @@ def cmd_board_publish(args):
 def cmd_board_complete(args):
     import json
 
-    body = {
-        "topic": f"board:{args.board_id}",
-        "text": json.dumps({"task_id": args.task_id, "result": args.result}),
-        "sender": args.sender or _default_sender(),
-        "tag": "done",
+    pane = args.pane or _default_sender().replace("pane-", "%")
+
+    # Build structured TaskResult dict
+    payload: dict = {}
+    if args.payload_json:
+        try:
+            payload = json.loads(args.payload_json)
+        except json.JSONDecodeError as e:
+            print(f"❌ invalid --payload-json: {e}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(payload, dict):
+            print("❌ --payload-json must decode to an object", file=sys.stderr)
+            sys.exit(1)
+
+    # Legacy single-string result → wrap into payload.note
+    if args.legacy_result and not payload:
+        payload = {"note": args.legacy_result}
+
+    result: dict = {
+        "status": args.status,
+        "payload": payload,
     }
-    r = httpx.post(f"{BASE_URL}/api/messages", json=body, headers=HEADERS, timeout=TIMEOUT)
+    if args.tokens is not None:
+        result["tokens_used"] = args.tokens
+    if args.duration_ms is not None:
+        result["duration_ms"] = args.duration_ms
+    if args.error_message:
+        result["error_message"] = args.error_message
+    if args.artifacts:
+        result["artifacts"] = list(args.artifacts)
+
+    body = {"task_id": args.task_id, "pane": pane, "result": result}
+    r = httpx.post(
+        f"{BASE_URL}/api/board/{args.board_id}/complete",
+        json=body,
+        headers=HEADERS,
+        timeout=TIMEOUT,
+    )
     if r.status_code == 200:
-        print(f"✅ Completed {args.task_id}")
+        d = r.json()
+        print(f"✅ Completed {args.task_id} (id={d.get('done_event') or d.get('id')})")
     else:
         print(f"❌ {r.status_code}: {r.text}", file=sys.stderr)
         sys.exit(1)
@@ -221,7 +253,21 @@ def main():
     bp_done = board_sub.add_parser("complete", help="Mark task done")
     bp_done.add_argument("board_id")
     bp_done.add_argument("task_id")
-    bp_done.add_argument("result", nargs="?", default="done")
+    bp_done.add_argument(
+        "legacy_result",
+        nargs="?",
+        default="",
+        help="(deprecated) legacy plain-string result; wrapped into payload.note",
+    )
+    bp_done.add_argument("--status", default="ok", choices=["ok", "error"])
+    bp_done.add_argument("--payload-json", default="", help="JSON object string for result.payload")
+    bp_done.add_argument("--tokens", type=int, default=None, help="result.tokens_used")
+    bp_done.add_argument("--duration-ms", type=int, default=None, help="result.duration_ms")
+    bp_done.add_argument("--error-message", default="", help="result.error_message")
+    bp_done.add_argument(
+        "--artifacts", nargs="*", default=[], help="result.artifacts (list of strings)"
+    )
+    bp_done.add_argument("--pane", default="")
     bp_done.add_argument("--sender", default="")
 
     args = p.parse_args()
