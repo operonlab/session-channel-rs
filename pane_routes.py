@@ -57,6 +57,7 @@ def _validate_advertise(body: dict) -> dict:
     now = int(time.time())
     started_at = int(body.get("started_at") or now)
     last_seen = int(body.get("last_seen") or now)
+    last_routed_at = int(body.get("last_routed_at") or 0)
 
     return {
         "pane_id": pane_id,
@@ -65,6 +66,7 @@ def _validate_advertise(body: dict) -> dict:
         "skills": skills,
         "started_at": started_at,
         "last_seen": last_seen,
+        "last_routed_at": last_routed_at,
     }
 
 
@@ -77,6 +79,7 @@ def _serialize_fields(record: dict) -> dict[str, str]:
         "skills": json.dumps(record["skills"], ensure_ascii=False),
         "started_at": str(record["started_at"]),
         "last_seen": str(record["last_seen"]),
+        "last_routed_at": str(record.get("last_routed_at", 0)),
     }
 
 
@@ -107,6 +110,7 @@ def _deserialize_fields(fields: dict) -> dict:
         "skills": _list(fields.get("skills")),
         "started_at": _int(fields.get("started_at")),
         "last_seen": _int(fields.get("last_seen")),
+        "last_routed_at": _int(fields.get("last_routed_at")),
     }
 
 
@@ -175,3 +179,21 @@ async def release_pane(pane_id: str, request: Request, _=Depends(require_auth)) 
     key = _pane_key(pane_id)
     deleted = await redis.delete(key)
     return {"status": "ok", "pane_id": pane_id, "deleted": bool(deleted)}
+
+
+@pane_router.post("/api/panes/{pane_id}/mark-routed")
+async def mark_routed(pane_id: str, request: Request, _=Depends(require_auth)) -> dict:
+    """Bump last_routed_at = now() on a live pane (LRR fairness signal).
+
+    Caller is the supervisor that just ``send-keys``'d a prompt to this pane.
+    Returns 404 if the pane has expired or was never advertised — caller
+    should re-advertise instead of silently noop.
+    """
+    redis = request.app.state.redis
+    key = _pane_key(pane_id)
+    if not await redis.exists(key):
+        raise HTTPException(status_code=404, detail=f"pane not found: {pane_id}")
+    now = int(time.time())
+    await redis.hset(key, "last_routed_at", str(now))
+    await redis.expire(key, _PANE_TTL_SECONDS)  # also refresh TTL
+    return {"status": "ok", "pane_id": pane_id, "last_routed_at": now}

@@ -110,7 +110,7 @@ MCPS_CSV="$(_detect_mcps)"
 SKILLS_CSV="$(_detect_skills)"
 MCPS_JSON="$(_to_json_array "$MCPS_CSV")"
 SKILLS_JSON="$(_to_json_array "$SKILLS_CSV")"
-NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+NOW_EPOCH="$(date +%s)"
 
 BODY="$(~/.local/bin/python3 -c "
 import json
@@ -119,13 +119,13 @@ print(json.dumps({
     'cli_type': '$CLI_TYPE',
     'mcps': $MCPS_JSON,
     'skills': $SKILLS_JSON,
-    'started_at': '$NOW_ISO',
-    'last_seen': '$NOW_ISO',
+    'started_at': $NOW_EPOCH,
+    'last_seen': $NOW_EPOCH,
 }))
 " 2>/dev/null)"
 
 if [[ -z "$BODY" ]]; then
-  BODY="{\"pane_id\":\"$PANE_ID\",\"cli_type\":\"$CLI_TYPE\",\"mcps\":[],\"skills\":[],\"started_at\":\"$NOW_ISO\",\"last_seen\":\"$NOW_ISO\"}"
+  BODY="{\"pane_id\":\"$PANE_ID\",\"cli_type\":\"$CLI_TYPE\",\"mcps\":[],\"skills\":[],\"started_at\":$NOW_EPOCH,\"last_seen\":$NOW_EPOCH}"
 fi
 
 _info "advertising pane_id=$PANE_ID cli_type=$CLI_TYPE mcps=$(echo "$MCPS_CSV" | awk -F, '{print NF}') skills=$(echo "$SKILLS_CSV" | awk -F, '{print NF}')"
