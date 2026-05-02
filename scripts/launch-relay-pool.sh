@@ -68,16 +68,30 @@ tmux has-session -t "$SESSION" 2>/dev/null || {
 
 [[ ${#SPECS[@]} -gt 0 ]] || { echo "no -c spec given (e.g. -c claude:1)" >&2; usage 1; }
 
-# Resolve cli_type → command
+# Resolve cli_type → command. Default flags grant full auto-approve so
+# the pool can act on routed prompts without per-prompt confirmation.
+# Set RELAY_POOL_SAFE=1 to drop the auto-approve flags (manual approval mode).
 cli_command() {
-  case "$1" in
-    claude|claude-code) echo "claude" ;;
-    codex)              echo "codex" ;;
-    gemini)             echo "gemini" ;;
-    copilot)            echo "copilot --allow-all" ;;
-    shell|zsh)          echo "zsh" ;;
-    *) return 1 ;;
-  esac
+  local cli="$1"
+  if [[ "${RELAY_POOL_SAFE:-0}" == "1" ]]; then
+    case "$cli" in
+      claude|claude-code) echo "claude" ;;
+      codex)              echo "codex" ;;
+      gemini)             echo "gemini" ;;
+      copilot)            echo "copilot" ;;
+      shell|zsh)          echo "zsh" ;;
+      *) return 1 ;;
+    esac
+  else
+    case "$cli" in
+      claude|claude-code) echo "claude --dangerously-skip-permissions" ;;
+      codex)              echo "codex --dangerously-bypass-approvals-and-sandbox" ;;
+      gemini)             echo "gemini --yolo" ;;
+      copilot)            echo "copilot --allow-all" ;;
+      shell|zsh)          echo "zsh" ;;
+      *) return 1 ;;
+    esac
+  fi
 }
 
 # Optional: kill stale pool window
