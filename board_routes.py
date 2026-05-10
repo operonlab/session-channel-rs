@@ -1,6 +1,6 @@
 """Board API — task bulletin board built on Redis Streams consumer groups.
 
-v2 architecture:
+Architecture:
 - Each board is a Redis Stream: ``ws:channel:board:{board_id}``
 - A single consumer group ``board-{board_id}`` provides atomic exactly-once
   claim semantics via ``XREADGROUP``.
@@ -11,8 +11,6 @@ v2 architecture:
   consumer; the reaper loop (W2-B) is responsible for re-publishing.
 - The projection rebuilds state from the stream + ``XPENDING`` summary,
   so there is no auxiliary claims hash to maintain.
-
-This module replaces the v1 Lua-CAS based implementation in ``board_lua.py``.
 """
 
 from __future__ import annotations

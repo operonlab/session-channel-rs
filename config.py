@@ -11,14 +11,6 @@ from sdk_client.station_bootstrap import load_yaml_config
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    """Parse env flag — accepts 0/1/true/false/yes/no (case-insensitive)."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
 @dataclass
 class Config:
     port: int = 10101
@@ -32,10 +24,6 @@ class Config:
     ttl_seconds: int = 1800
     trim_interval: int = 60
     max_stream_len: int = 500
-    # Feature flag: BOARD_V2=1 → 使用 Streams 原生 consumer group 路徑（v2，預設）
-    # BOARD_V2=0 → 切回 v1 自寫 Lua CAS + claims hash 路徑（rollback safety net）
-    # 用途：W5-C runbook Tier 1 緊急 rollback；不需要 git revert 即可切舊邏輯
-    board_v2: bool = True
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -58,11 +46,6 @@ def load_config(path: Path | None = None) -> Config:
             val = raw[key]
             expected = type(getattr(cfg, key))
             setattr(cfg, key, expected(val))
-    # Env override（feature flag 優先吃 env，方便 launchctl env 切換）
-    cfg.board_v2 = _env_bool(
-        "BOARD_V2",
-        raw.get("board_v2", True) if isinstance(raw.get("board_v2", True), bool) else True,
-    )
     # Env override for port — convenient for parallel worktrees / validation
     port_env = os.environ.get("SESSION_CHANNEL_PORT")
     if port_env:
