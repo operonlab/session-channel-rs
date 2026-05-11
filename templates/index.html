@@ -113,6 +113,14 @@
     flex: 1;
   }
   .sender-card .s-time { color: var(--subtext); flex-shrink: 0; }
+  .sender-card .s-tool {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px; color: var(--blue);
+    margin-top: 3px; opacity: 0.9;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sender-card .s-tool.hidden { display: none; }
+  .sender-card .s-tool::before { content: "⚙ "; opacity: 0.7; }
 
   /* light colours */
   .light.active   { background: var(--green); }
@@ -265,11 +273,13 @@
         <span class="s-task"></span>
         <span class="s-time">—</span>
       </div>
+      <div class="s-tool hidden"></div>
     `;
     card.addEventListener('click', () => toggleSenderFilter(d.sender || key, card));
     const entry = {
       key, lastTs: Date.now(), lastText: '', lastTag: '',
       sender: d.sender || key, meta: null, cardEl: card,
+      latestTool: '', latestToolTs: 0,
     };
     senderMap.set(key, entry);
     sendersList.prepend(card);
@@ -306,10 +316,29 @@
     if (!branch && !cwd) line2.textContent = entry.sender;
 
     card.querySelector('.s-task').textContent = task ? `➤ ${task}` : '';
-    card.querySelector('.s-time').textContent = relTime(entry.lastTs);
-    card.querySelector('.light').className = 'light ' + lightClass(entry.lastTs);
 
-    const ageMs = Date.now() - entry.lastTs;
+    // Live indicator counts the most recent of {heartbeat/announce, tool event}.
+    // Tool events fire per-tool-call so a busy pane should look "active" even
+    // if heartbeat hasn't fired yet (heartbeat is throttled to 30s).
+    const liveTs = Math.max(entry.lastTs, entry.latestToolTs || 0);
+    card.querySelector('.s-time').textContent = relTime(liveTs);
+    card.querySelector('.light').className = 'light ' + lightClass(liveTs);
+
+    // s-tool: shows what tool just ran. Hides after 90s of silence so we
+    // don't render stale "just did X" text on idle panes.
+    const toolEl = card.querySelector('.s-tool');
+    if (toolEl) {
+      const toolFresh = entry.latestTool && entry.latestToolTs > 0 &&
+                       (Date.now() - entry.latestToolTs) < 90 * 1000;
+      if (toolFresh) {
+        toolEl.textContent = entry.latestTool;
+        toolEl.classList.remove('hidden');
+      } else {
+        toolEl.classList.add('hidden');
+      }
+    }
+
+    const ageMs = Date.now() - liveTs;
     card.classList.toggle('stale', ageMs > STALE_AFTER_MS);
   }
 
@@ -328,11 +357,23 @@
     const entry = getSenderCard(d);
     // prefer event ts from server if present; fall back to client time
     const serverTs = d._meta && d._meta.ts ? d._meta.ts * 1000 : null;
-    entry.lastTs   = serverTs || Date.now();
-    entry.lastText = d.text || '';
-    entry.lastTag  = d.tag  || '';
-    entry.sender   = d.sender || entry.sender;
-    if (d._meta && typeof d._meta === 'object') entry.meta = d._meta;
+    const ts = serverTs || Date.now();
+
+    if (d.tag === 'tool') {
+      // Tool events update only the bottom "right now" line. The task
+      // summary (s-task) stays — task descriptions change slowly while
+      // tool calls fire per-action and would otherwise overwrite each
+      // other every keystroke.
+      entry.latestTool   = d.text || '';
+      entry.latestToolTs = ts;
+      if (d._meta && typeof d._meta === 'object') entry.meta = d._meta;
+    } else {
+      entry.lastTs   = ts;
+      entry.lastText = d.text || '';
+      entry.lastTag  = d.tag  || '';
+      entry.sender   = d.sender || entry.sender;
+      if (d._meta && typeof d._meta === 'object') entry.meta = d._meta;
+    }
 
     paintCard(entry);
     sendersList.prepend(entry.cardEl);
