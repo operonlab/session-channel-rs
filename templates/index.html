@@ -426,7 +426,10 @@
     allMsgs.push(d);
     if (allMsgs.length > 2000) allMsgs.splice(0, allMsgs.length - 2000);
 
-    updateSenderCard(d);
+    // Non-agents topics only feed the right log; do NOT spawn fallback cards
+    // (those would have no _meta and show as `?` placeholders, polluting the
+    // panel — the only authoritative source of pane identity is the `agents`
+    // topic published by hooks).
 
     if (msgMatchesFilter(d)) {
       log.appendChild(renderMsgEl(d));
