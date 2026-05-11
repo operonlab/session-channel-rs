@@ -43,9 +43,9 @@
     flex: 1; display: flex; overflow: hidden;
   }
 
-  /* ── Left: Sender timeline ──────────────────── */
+  /* ── Left: Agent timeline ──────────────────── */
   #senders-pane {
-    width: 280px; flex-shrink: 0;
+    width: 300px; flex-shrink: 0;
     background: var(--surface);
     border-right: 1px solid var(--overlay);
     display: flex; flex-direction: column;
@@ -55,7 +55,9 @@
     font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
     color: var(--subtext); padding: 8px 12px 6px;
     border-bottom: 1px solid var(--overlay); flex-shrink: 0;
+    display: flex; justify-content: space-between; align-items: center;
   }
+  #senders-pane h2 .agent-count { color: var(--blue); font-weight: 600; }
   #senders-list {
     overflow-y: auto; flex: 1; padding: 6px 8px; display: flex;
     flex-direction: column; gap: 5px;
@@ -64,27 +66,53 @@
     position: relative; background: var(--overlay);
     border: 1px solid var(--overlay); border-radius: 6px;
     padding: 8px 10px 8px 16px;
-    cursor: pointer; transition: background 0.15s;
+    cursor: pointer; transition: background 0.15s, opacity 0.3s;
     overflow: hidden;
   }
   .sender-card:hover { background: #3a3a52; }
   .sender-card.selected { background: #2a2a44; border-color: var(--blue); }
+  .sender-card.stale { opacity: 0.35; }
   .sender-card .light {
     position: absolute; left: 0; top: 0; bottom: 0;
     width: 3px; border-radius: 6px 0 0 6px;
   }
+  .sender-card .s-line1 {
+    display: flex; align-items: baseline; gap: 6px; font-size: 12px;
+  }
+  .sender-card .s-icon { font-size: 13px; }
   .sender-card .s-name {
-    font-weight: 600; color: var(--mauve); font-size: 12px;
+    font-weight: 600; color: var(--mauve);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    flex: 1;
   }
-  .sender-card .s-time {
-    font-size: 11px; color: var(--subtext); margin-top: 2px;
+  .sender-card .s-role {
+    font-size: 10px; color: var(--subtext);
+    text-transform: uppercase; letter-spacing: 0.05em;
   }
-  .sender-card .s-preview {
+  .sender-card .s-role.main { color: var(--blue); font-weight: 600; }
+  .sender-card .s-ctx {
+    font-size: 11px; font-weight: 600; tabular-nums: yes;
+  }
+  .sender-card .s-ctx.ok    { color: var(--green); }
+  .sender-card .s-ctx.warn  { color: var(--yellow); }
+  .sender-card .s-ctx.danger { color: var(--red); }
+  .sender-card .s-ctx.unknown { color: var(--subtext); }
+  .sender-card .s-line2 {
     font-size: 11px; color: var(--subtext); margin-top: 3px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .sender-card .s-preview .preview-tag { color: var(--yellow); }
+  .sender-card .s-line2 .branch { color: var(--teal); }
+  .sender-card .s-line2 .cwd    { color: var(--subtext); }
+  .sender-card .s-line3 {
+    display: flex; justify-content: space-between; gap: 6px;
+    font-size: 11px; color: var(--subtext); margin-top: 3px;
+  }
+  .sender-card .s-task {
+    color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    flex: 1;
+  }
+  .sender-card .s-time { color: var(--subtext); flex-shrink: 0; }
 
   /* light colours */
   .light.active   { background: var(--green); }
@@ -126,9 +154,9 @@
 </header>
 
 <div id="main">
-  <!-- Left: sender timeline -->
+  <!-- Left: agent timeline -->
   <div id="senders-pane">
-    <h2>Senders</h2>
+    <h2><span>Agents</span><span class="agent-count" id="agent-count">0</span></h2>
     <div id="senders-list"></div>
   </div>
 
@@ -162,9 +190,15 @@
   let selectedSender = null;
   const seenTopics = new Set();
   const FETCH_OPTS  = { credentials: 'same-origin' };
+  const agentCountEl = document.getElementById('agent-count');
 
-  // sender state: Map<senderKey, { lastTs, lastText, lastTag, cardEl }>
+  // agent state: Map<agentKey, { lastTs, lastText, lastTag, sender, meta, cardEl }>
+  // key = "host:pane" if _meta present, else sender string
   const senderMap = new Map();
+
+  const STALE_AFTER_MS = 5 * 60 * 1000;
+  const DROP_AFTER_MS  = 30 * 60 * 1000;
+  const CLI_ICON = { claude: '🔷', codex: '🔶', gemini: '💎' };
 
   // ── Helpers ──────────────────────────────────────────────────────────
   function esc(s) {
@@ -175,9 +209,9 @@
 
   function relTime(ms) {
     const s = Math.floor((Date.now() - ms) / 1000);
-    if (s < 60)  return s + 's ago';
-    if (s < 3600) return Math.floor(s / 60) + 'm ago';
-    return Math.floor(s / 3600) + 'h ago';
+    if (s < 60)  return s + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    return Math.floor(s / 3600) + 'h';
   }
 
   function lightClass(ms) {
@@ -187,41 +221,115 @@
     return 'inactive';
   }
 
-  // ── Sender cards ─────────────────────────────────────────────────────
-  function getSenderCard(sender) {
-    if (senderMap.has(sender)) return senderMap.get(sender);
-    // create card
+  function ctxClass(pct) {
+    if (pct == null || isNaN(pct)) return 'unknown';
+    if (pct < 50) return 'ok';
+    if (pct < 80) return 'warn';
+    return 'danger';
+  }
+
+  function shortPane(p) {
+    if (!p) return '?';
+    return String(p).replace(/^pid-/, 'p').replace(/^%/, '').slice(0, 8);
+  }
+
+  function agentKey(d) {
+    const m = d && d._meta;
+    if (m && (m.host || m.pane)) return `${m.host || '?'}:${m.pane || '?'}`;
+    return d && d.sender ? `s:${d.sender}` : '?';
+  }
+
+  // ── Agent cards ──────────────────────────────────────────────────────
+  function getSenderCard(d) {
+    const key = agentKey(d);
+    if (senderMap.has(key)) return senderMap.get(key);
     const card = document.createElement('div');
     card.className = 'sender-card';
     card.innerHTML = `
       <div class="light inactive"></div>
-      <div class="s-name">${esc(sender)}</div>
-      <div class="s-time">—</div>
-      <div class="s-preview"></div>
+      <div class="s-line1">
+        <span class="s-icon">·</span>
+        <span class="s-name">—</span>
+        <span class="s-role"></span>
+        <span class="s-ctx unknown">—</span>
+      </div>
+      <div class="s-line2"></div>
+      <div class="s-line3">
+        <span class="s-task"></span>
+        <span class="s-time">—</span>
+      </div>
     `;
-    card.addEventListener('click', () => toggleSenderFilter(sender, card));
-    const entry = { lastTs: Date.now(), lastText: '', lastTag: '', cardEl: card };
-    senderMap.set(sender, entry);
+    card.addEventListener('click', () => toggleSenderFilter(d.sender || key, card));
+    const entry = {
+      key, lastTs: Date.now(), lastText: '', lastTag: '',
+      sender: d.sender || key, meta: null, cardEl: card,
+    };
+    senderMap.set(key, entry);
     sendersList.prepend(card);
     return entry;
   }
 
-  function updateSenderCard(d) {
-    const sender = d.sender || '?';
-    const entry  = getSenderCard(sender);
-    entry.lastTs   = Date.now();
-    entry.lastText = d.text || '';
-    entry.lastTag  = d.tag  || '';
-
+  function paintCard(entry) {
     const card = entry.cardEl;
+    const m = entry.meta || {};
+    const cli = (m.cli || 'claude').toLowerCase();
+    const icon = CLI_ICON[cli] || '·';
+    const role = m.role || '';
+    const branch = m.branch || '';
+    const cwd = m.cwd || '';
+    const task = entry.lastText || m.task || '';
+    const ctx = m.ctx_pct;
+    const paneLabel = shortPane(m.pane) || entry.sender;
+    const sidLabel = m.sid ? `·${m.sid.slice(0, 4)}` : '';
+
+    card.querySelector('.s-icon').textContent = icon;
+    card.querySelector('.s-name').textContent = `${paneLabel}${sidLabel}`;
+    const roleEl = card.querySelector('.s-role');
+    roleEl.textContent = role ? `▸ ${role}` : '';
+    roleEl.className = 's-role' + (role === 'main' ? ' main' : '');
+
+    const ctxEl = card.querySelector('.s-ctx');
+    ctxEl.className = 's-ctx ' + ctxClass(ctx);
+    ctxEl.textContent = (ctx == null) ? '—' : `${Math.round(parseFloat(ctx))}%`;
+
+    const line2 = card.querySelector('.s-line2');
+    line2.innerHTML = '';
+    if (branch) line2.innerHTML += `<span class="branch">⎇ ${esc(branch)}</span>`;
+    if (cwd)    line2.innerHTML += `${branch ? ' · ' : ''}<span class="cwd">${esc(cwd)}</span>`;
+    if (!branch && !cwd) line2.textContent = entry.sender;
+
+    card.querySelector('.s-task').textContent = task ? `➤ ${task}` : '';
     card.querySelector('.s-time').textContent = relTime(entry.lastTs);
-    const preview = card.querySelector('.s-preview');
-    const tagPart = entry.lastTag ? `<span class="preview-tag">#${esc(entry.lastTag)}</span> ` : '';
-    preview.innerHTML = tagPart + esc(entry.lastText);
     card.querySelector('.light').className = 'light ' + lightClass(entry.lastTs);
 
-    // re-sort: bring to top
-    sendersList.prepend(card);
+    const ageMs = Date.now() - entry.lastTs;
+    card.classList.toggle('stale', ageMs > STALE_AFTER_MS);
+  }
+
+  function updateSenderCard(d) {
+    if (d && d.tag === 'leave') {
+      const k = agentKey(d);
+      const e = senderMap.get(k);
+      if (e) {
+        try { e.cardEl.remove(); } catch (_) {}
+        senderMap.delete(k);
+        agentCountEl.textContent = senderMap.size;
+      }
+      return;
+    }
+
+    const entry = getSenderCard(d);
+    // prefer event ts from server if present; fall back to client time
+    const serverTs = d._meta && d._meta.ts ? d._meta.ts * 1000 : null;
+    entry.lastTs   = serverTs || Date.now();
+    entry.lastText = d.text || '';
+    entry.lastTag  = d.tag  || '';
+    entry.sender   = d.sender || entry.sender;
+    if (d._meta && typeof d._meta === 'object') entry.meta = d._meta;
+
+    paintCard(entry);
+    sendersList.prepend(entry.cardEl);
+    agentCountEl.textContent = senderMap.size;
   }
 
   function toggleSenderFilter(sender, card) {
@@ -229,10 +337,8 @@
       selectedSender = null;
       card.classList.remove('selected');
     } else {
-      // deselect previous
       if (selectedSender) {
-        const prev = senderMap.get(selectedSender);
-        if (prev) prev.cardEl.classList.remove('selected');
+        senderMap.forEach((e) => e.cardEl.classList.remove('selected'));
       }
       selectedSender = sender;
       card.classList.add('selected');
@@ -240,13 +346,23 @@
     rebuildLog();
   }
 
-  // ── Tick: update relative times + light colours every second ─────────
+  // ── Tick: refresh time labels, stale, and GC dropped cards ───────────
   setInterval(() => {
-    senderMap.forEach((entry, _sender) => {
+    const now = Date.now();
+    const drop = [];
+    senderMap.forEach((entry, key) => {
       const card = entry.cardEl;
+      const age = now - entry.lastTs;
       card.querySelector('.s-time').textContent = relTime(entry.lastTs);
       card.querySelector('.light').className = 'light ' + lightClass(entry.lastTs);
+      card.classList.toggle('stale', age > STALE_AFTER_MS);
+      if (age > DROP_AFTER_MS) drop.push(key);
     });
+    drop.forEach(k => {
+      const e = senderMap.get(k);
+      if (e) { try { e.cardEl.remove(); } catch (_) {} senderMap.delete(k); }
+    });
+    if (drop.length) agentCountEl.textContent = senderMap.size;
   }, 1000);
 
   // ── Message buffering & log rendering ────────────────────────────────
@@ -293,14 +409,18 @@
     if (paused) return;
 
     d._clientTs = d._clientTs || Date.now();
+
+    // route agents-topic messages to the agent panel only (don't flood the log)
+    if (d.topic === 'agents') {
+      updateSenderCard(d);
+      return;
+    }
+
     allMsgs.push(d);
-    // keep buffer bounded
     if (allMsgs.length > 2000) allMsgs.splice(0, allMsgs.length - 2000);
 
-    // update sender card
     updateSenderCard(d);
 
-    // append to log if passes filter
     if (msgMatchesFilter(d)) {
       log.appendChild(renderMsgEl(d));
       msgCount++;
@@ -379,17 +499,20 @@
   sendBtn.onclick = doSend;
   msgInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSend(); });
 
-  // ── Bootstrap: fetch top-3 topics → seed left panel ─────────────────
+  // ── Bootstrap: load active agents + populate topic filter ───────────
   async function bootstrap() {
+    // 1. seed agent cards from /api/agents/active
     try {
-      const r    = await fetch('/api/topics', FETCH_OPTS);
+      const r = await fetch('/api/agents/active?within=1800', FETCH_OPTS);
       const data = await r.json();
-      const topics = (data.topics || [])
-        .sort((a, b) => (b.count || 0) - (a.count || 0))
-        .slice(0, 3);
+      (data.agents || []).forEach(a => updateSenderCard(a));
+    } catch (_) {}
 
-      // populate dropdown
-      topics.forEach(t => {
+    // 2. populate topic filter
+    try {
+      const r = await fetch('/api/topics', FETCH_OPTS);
+      const data = await r.json();
+      (data.topics || []).forEach(t => {
         if (!seenTopics.has(t.topic)) {
           seenTopics.add(t.topic);
           const opt = document.createElement('option');
@@ -397,19 +520,6 @@
           filter.appendChild(opt);
         }
       });
-
-      // fetch messages per topic to seed sender cards
-      for (const t of topics) {
-        try {
-          const mr   = await fetch(`/api/messages/${encodeURIComponent(t.topic)}?count=100`, FETCH_OPTS);
-          const mdata= await mr.json();
-          (mdata.messages || []).forEach(m => {
-            m._clientTs = Date.now();
-            // only update sender cards, do NOT push to allMsgs (avoid log flood on load)
-            if (m.sender) updateSenderCard(m);
-          });
-        } catch (_) {}
-      }
     } catch (_) {}
   }
 

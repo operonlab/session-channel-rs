@@ -34,9 +34,21 @@ def _check_rate(sender: str) -> None:
 _sse_clients: set[asyncio.Queue] = set()
 
 
+def _hydrate_meta(entry: dict) -> dict:
+    """Parse stringified _meta back into a dict for consumers (SSE / HTTP)."""
+    raw = entry.get("_meta")
+    if not raw or not isinstance(raw, str):
+        return entry
+    try:
+        entry["_meta"] = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return entry
+
+
 def sse_broadcast(data: dict) -> None:
     """Push a message to all SSE clients. Drop slow clients."""
-    payload = json.dumps(data, default=str)
+    payload = json.dumps(_hydrate_meta(dict(data)), default=str)
     message = f"data: {payload}\n\n"
     dead: set[asyncio.Queue] = set()
     for q in _sse_clients:
@@ -72,6 +84,7 @@ async def send_message(request: Request, _=Depends(require_auth)):
     sender = body.get("sender", "anon").strip()
     tag = body.get("tag", "").strip() or None
     priority = body.get("priority", "normal").strip()
+    meta = body.get("_meta")
 
     if not topic or not text:
         raise HTTPException(status_code=400, detail="topic and text required")
@@ -92,6 +105,11 @@ async def send_message(request: Request, _=Depends(require_auth)):
     }
     if tag:
         entry["tag"] = tag
+    if isinstance(meta, dict) and meta:
+        meta_json = json.dumps(meta, default=str)
+        if len(meta_json) > 8192:
+            raise HTTPException(status_code=400, detail="_meta max 8192 chars")
+        entry["_meta"] = meta_json
 
     # XADD with inline MAXLEN trim (first line of defense)
     msg_id = await redis.xadd(
@@ -127,8 +145,77 @@ async def read_messages(
     raw = await redis.xrange(stream_key, min=since, count=count)
     messages = []
     for msg_id, fields in raw:
-        messages.append({"id": msg_id, "topic": topic, **fields})
+        entry = {"id": msg_id, "topic": topic, **fields}
+        messages.append(_hydrate_meta(entry))
     return {"messages": messages, "count": len(messages)}
+
+
+# --- Active agents (reduced view of `agents` topic) ---
+
+
+@router.get("/api/agents/active")
+async def list_active_agents(
+    request: Request,
+    within: int = Query(default=300, ge=10, le=3600, description="Look-back window in seconds"),
+    _=Depends(require_auth),
+):
+    """Return latest snapshot per agent (keyed by _meta.host:_meta.pane).
+
+    Reads the `agents` Redis stream within the look-back window, applies a
+    last-write-wins reduce per agent key, and drops entries marked tag=leave.
+    """
+    redis = request.app.state.redis
+    stream_key = f"{config.stream_prefix}agents"
+
+    min_ts_ms = int((time.time() - within) * 1000)
+    min_id = f"{min_ts_ms}-0"
+    raw = await redis.xrange(stream_key, min=min_id, count=2000)
+
+    seen: dict[str, dict] = {}
+    for msg_id, fields in raw:
+        meta_raw = fields.get("_meta", "")
+        meta: dict = {}
+        if meta_raw:
+            try:
+                meta = json.loads(meta_raw)
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+        host = str(meta.get("host", "?"))
+        pane = str(meta.get("pane", fields.get("sender", "?")))
+        key = f"{host}:{pane}"
+
+        try:
+            ts_ms = int(str(msg_id).split("-")[0])
+        except (ValueError, AttributeError):
+            ts_ms = 0
+
+        tag = fields.get("tag", "")
+        if tag == "leave":
+            seen.pop(key, None)
+            continue
+
+        seen[key] = {
+            "id": msg_id,
+            "key": key,
+            "ts_ms": ts_ms,
+            "last_seen": ts_ms / 1000.0,
+            "tag": tag,
+            "sender": fields.get("sender", ""),
+            "text": fields.get("text", ""),
+            "_meta": meta,
+        }
+
+    def _sort_key(agent: dict) -> tuple:
+        m = agent.get("_meta") or {}
+        role_rank = 0 if m.get("role") == "main" else 1
+        try:
+            ctx = float(m.get("ctx_pct") or 0)
+        except (TypeError, ValueError):
+            ctx = 0.0
+        return (role_rank, -ctx, -agent["ts_ms"])
+
+    agents = sorted(seen.values(), key=_sort_key)
+    return {"agents": agents, "count": len(agents), "within": within}
 
 
 # --- List topics ---

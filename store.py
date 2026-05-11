@@ -7,6 +7,7 @@ for the cross-session communication bus backed by Redis Streams.
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core"))
@@ -14,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core"))
 import logging
 
 from src.shared.actions import create_action, create_reducer, on
-from src.shared.immutable_utils import update_in
+from src.shared.immutable_utils import to_dict, update_in
 from src.shared.middleware import LoggerMiddleware
 from src.shared.selectors import create_selector
 from src.shared.store import FeatureStore, effect, register_effects
@@ -28,6 +29,8 @@ MessagePublished = create_action("channel.message.published")
 SubscriberJoined = create_action("channel.subscriber.joined")
 SubscriberLeft = create_action("channel.subscriber.left")
 StreamTrimmed = create_action("channel.stream.trimmed")
+AgentSnapshotReceived = create_action("channel.agent.snapshot")
+AgentLeft = create_action("channel.agent.left")
 
 # ── Reducer ──────────────────────────────────────────────────────────────
 
@@ -35,6 +38,7 @@ _INITIAL_STATE = {
     "topics": {},
     "subscriber_count": 0,
     "message_count": 0,
+    "agents": {},  # key="{host}:{pane}" → snapshot dict
 }
 
 
@@ -71,6 +75,24 @@ channel_reducer = create_reducer(
             s,
             ["topics", _p(a).get("topic", ""), "trimmed_count"],
             lambda prev: (prev or 0) + _p(a).get("trimmed", 0),
+        ),
+    ),
+    on(
+        AgentSnapshotReceived,
+        lambda s, a: update_in(
+            s,
+            ["agents", _p(a).get("key", "")],
+            lambda _: _p(a),
+        ),
+    ),
+    on(
+        AgentLeft,
+        lambda s, a: update_in(
+            s,
+            ["agents"],
+            lambda agents: {
+                k: v for k, v in (to_dict(agents) or {}).items() if k != _p(a).get("key", "")
+            },
         ),
     ),
 )
@@ -110,6 +132,42 @@ select_channel_summary = create_selector(
         "subscriber_count": subs,
         "message_count": msgs,
     },
+)
+
+# ── Agent selectors ──────────────────────────────────────────────────────
+
+select_agents = create_selector(lambda s: s.get("agents", {}))
+
+
+def select_active_agents(within_seconds: int = 300):
+    """Factory returning a selector for agents seen within the window."""
+    cutoff = time.time() - within_seconds
+    return create_selector(
+        select_agents,
+        result_fn=lambda agents: {
+            k: to_dict(v)
+            for k, v in (to_dict(agents) or {}).items()
+            if (v or {}).get("last_seen", 0) >= cutoff
+        },
+    )
+
+
+def _agent_sort_key(agent: dict) -> tuple:
+    meta = (agent.get("_meta") or {}) if isinstance(agent, dict) else {}
+    role_rank = 0 if meta.get("role") == "main" else 1
+    try:
+        ctx = float(meta.get("ctx_pct") or 0)
+    except (TypeError, ValueError):
+        ctx = 0.0
+    return (role_rank, -ctx, -(agent.get("ts_ms", 0) if isinstance(agent, dict) else 0))
+
+
+select_agents_sorted = create_selector(
+    select_agents,
+    result_fn=lambda agents: sorted(
+        (to_dict(v) for v in (to_dict(agents) or {}).values()),
+        key=_agent_sort_key,
+    ),
 )
 
 # ── Store Singleton ───────────────────────────────────────────────────────
