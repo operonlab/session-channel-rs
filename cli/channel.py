@@ -144,6 +144,8 @@ def _tmux_nudge(pane: str, topic: str, task_id: str = "", task_prompt: str = "")
         wakeup = "channel read tasks --count 10"
     else:
         wakeup = f"channel read {topic} --count 5"
+    import time
+
     try:
         # send the prompt text
         subprocess.run(  # noqa: S603
@@ -152,6 +154,11 @@ def _tmux_nudge(pane: str, topic: str, task_id: str = "", task_prompt: str = "")
             timeout=2,
             stderr=subprocess.PIPE,
         )
+        # Brief settle delay before submitting. Claude TUI is unaffected; Codex
+        # TUI dropped Enter when fired immediately after the text payload
+        # (Phase E validation 2026-05-11), so a small buffer makes the push
+        # reliable across all CLIs.
+        time.sleep(0.3)
         # send Enter (separate call to avoid escape interpretation in payload)
         subprocess.run(  # noqa: S603
             ["tmux", "send-keys", "-t", pane, "Enter"],  # noqa: S607
