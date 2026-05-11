@@ -93,24 +93,51 @@ def cmd_send(args):
             print("⚠️  --notify: no target pane(s) found, skipping push", file=sys.stderr)
             return
 
+        # For `tasks` topic with an explicit prompt in _meta, push the prompt
+        # itself as the wakeup — much more reliable than asking Claude to
+        # re-discover the task via `channel read`. Other topics still get
+        # the read-style nudge.
+        task_id = ""
+        task_prompt = ""
+        if args.topic == "tasks" and isinstance(meta_dict, dict):
+            task_id = str(meta_dict.get("task_id") or "")
+            task_prompt = str(meta_dict.get("prompt") or "")
+
         for pane in targets:
-            _tmux_nudge(pane, args.topic)
+            _tmux_nudge(pane, args.topic, task_id=task_id, task_prompt=task_prompt)
 
 
-def _tmux_nudge(pane: str, topic: str) -> None:
+def _tmux_nudge(pane: str, topic: str, task_id: str = "", task_prompt: str = "") -> None:
     """Push a wakeup line into the target pane via tmux send-keys.
 
     Sends the literal text + a real Enter (C-m). Prints a one-line summary
     so the caller knows the push happened.
+
+    Modes:
+    - `tasks` topic + non-empty `task_prompt`: push the prompt itself as the
+      user-ask, with a tail asking the worker to report done via channel.
+      This works for a Claude Code pane (treated as a real user prompt) and
+      for a zsh pane (the prompt is presumed to be a shell command — though
+      zsh won't auto-report done; the human starting zsh worker accepts that).
+    - other topics: push `channel read <topic> --count N` so the recipient
+      sees what was published.
     """
     import subprocess
 
     if not pane.startswith("%"):
         pane = "%" + pane.lstrip("%")
-    # Use the raw CLI form (no slash) — works both for zsh (PATH lookup) and
-    # Claude Code (which will execute it via Bash tool). The slash form
-    # "/channel ..." would error in zsh: "no such file or directory: /channel".
-    wakeup = f"channel read {topic} --count 5"
+
+    if topic == "tasks" and task_prompt:
+        report_meta = '{"v":1,"task_id":"' + task_id + '","status":"ok","summary":"<one-line>"}'
+        wakeup = (
+            f"{task_prompt}  # via session-channel task_id={task_id}; "
+            f"after completion run: channel send tasks "
+            f"\"{task_id}: done\" --tag done --meta '{report_meta}'"
+        )
+    elif topic == "tasks":
+        wakeup = "channel read tasks --count 10"
+    else:
+        wakeup = f"channel read {topic} --count 5"
     try:
         # send the prompt text
         subprocess.run(  # noqa: S603
