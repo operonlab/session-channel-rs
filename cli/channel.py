@@ -623,6 +623,256 @@ def cmd_race(args):
         print(f"\n🏁 all {len(task_ids)} race task(s) settled")
 
 
+def _parse_participants(spec: str) -> list[dict]:
+    """Parse 'A:claude:%5,B:codex:%6' or 'claude:%5,codex:%6' into a list of
+    {label, cli, pane}. Short form auto-assigns labels P1, P2, ...
+    """
+    out: list[dict] = []
+    for i, chunk in enumerate(spec.split(","), start=1):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        parts = [s.strip() for s in chunk.split(":")]
+        if len(parts) == 3:
+            label, cli, pane = parts
+        elif len(parts) == 2:
+            label = f"P{i}"
+            cli, pane = parts
+        else:
+            raise ValueError(
+                f"participant spec '{chunk}' must be 'label:cli:pane' or 'cli:pane'"
+            )
+        if not pane.startswith("%"):
+            pane = "%" + pane.lstrip("%")
+        cli = cli.lower()
+        if not (label and cli and pane != "%"):
+            raise ValueError(f"participant spec '{chunk}' missing field")
+        out.append({"label": label, "cli": cli, "pane": pane})
+    return out
+
+
+def _parse_synthesizer(spec: str) -> dict | None:
+    if not spec:
+        return None
+    parsed = _parse_participants(spec)
+    if len(parsed) != 1:
+        raise ValueError("--synthesizer must be exactly one cli:pane")
+    parsed[0]["label"] = "S"
+    return parsed[0]
+
+
+def _wait_for_outcome(task_id: str, timeout_s: int) -> dict:
+    """Poll the tasks topic until task_id has a done/failed event.
+
+    Returns {status, result, summary, error}. status='timeout' if deadline hit.
+    Two-tier result capture: prefers _meta.result (full body, when worker
+    fills it), falls back to _meta.summary (1-line) for legacy workers.
+    """
+    import json as _json
+    import time as _t
+
+    deadline = _t.time() + timeout_s
+    while _t.time() < deadline:
+        _t.sleep(3)
+        try:
+            r = httpx.get(
+                f"{BASE_URL}/api/messages/tasks",
+                params={"count": 200, "order": "oldest"},
+                headers=HEADERS,
+                timeout=TIMEOUT,
+            )
+            msgs = r.json().get("messages", [])
+        except httpx.HTTPError:
+            continue
+        for m in msgs:
+            mt = m.get("_meta") or {}
+            if isinstance(mt, str):
+                try:
+                    mt = _json.loads(mt)
+                except _json.JSONDecodeError:
+                    mt = {}
+            tid = str(mt.get("task_id") or _parse_task_id(m.get("text", "")) or "")
+            if tid == task_id and m.get("tag") in ("done", "failed"):
+                return {
+                    "status": m.get("tag"),
+                    "result": str(mt.get("result", "")),
+                    "summary": str(mt.get("summary", "")),
+                    "error": str(mt.get("error", "")),
+                }
+    return {
+        "status": "timeout",
+        "result": "",
+        "summary": "",
+        "error": f"no done/failed within {timeout_s}s",
+    }
+
+
+def _dispatch_one(
+    *, task_id: str, prompt: str, pane: str, role: str, base_id: str,
+    extra_meta: dict | None = None, summary_text: str | None = None,
+) -> bool:
+    """Publish one assign + tmux nudge. Returns True on publish success.
+
+    Shared by cmd_debate's per-round dispatch and synthesizer dispatch.
+    """
+    meta = {
+        "v": 1,
+        "task_id": task_id,
+        "debate_base_id": base_id,
+        "debate_role": role,
+        "target_pane": pane,
+        "prompt": prompt,
+    }
+    if extra_meta:
+        meta.update(extra_meta)
+    body = {
+        "topic": "tasks",
+        "text": summary_text or (prompt[:200] + ("..." if len(prompt) > 200 else "")),
+        "sender": _default_sender(),
+        "priority": "normal",
+        "tag": "assign",
+        "_meta": meta,
+    }
+    try:
+        r = httpx.post(f"{BASE_URL}/api/messages", json=body, headers=HEADERS, timeout=TIMEOUT)
+        if r.status_code != 200:
+            print(f"  ⚠️  publish failed HTTP {r.status_code}", file=sys.stderr)
+            return False
+        print(f"  ✅ [tasks] {task_id} dispatched, id={r.json().get('id','?')}")
+    except httpx.HTTPError as e:
+        print(f"  ⚠️  publish error: {e}", file=sys.stderr)
+        return False
+    _tmux_nudge(pane, "tasks", task_id=task_id, task_prompt=prompt)
+    return True
+
+
+def cmd_debate(args):
+    """Multi-round cross-CLI debate; optional synthesizer for final refinement.
+
+    Quality of each round's capture is two-tier: prefers `_meta.result` (full
+    body, when worker fills it), falls back to `_meta.summary` (1-line) for
+    workers that haven't been taught the result convention. To raise quality,
+    teach workers via session-channel-worker rule to include a `result` field
+    in their done event.
+    """
+    try:
+        participants = _parse_participants(args.participants)
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr); sys.exit(2)
+    if len(participants) < 2:
+        print(
+            "❌ --participants needs ≥ 2 (e.g. A:claude:%%5,B:codex:%%6)",
+            file=sys.stderr,
+        ); sys.exit(2)
+
+    try:
+        synthesizer = _parse_synthesizer(args.synthesizer)
+    except ValueError as e:
+        print(f"❌ --synthesizer: {e}", file=sys.stderr); sys.exit(2)
+
+    rounds = max(1, args.rounds)
+    base_id = args.debate_id
+    question = args.message
+    round_timeout = args.round_timeout
+
+    transcript: list[dict] = []
+    print(
+        f"⚔️  debate: {len(participants)} participants × {rounds} rounds, "
+        f"base_id={base_id}"
+    )
+    if synthesizer:
+        print(f"   synthesizer: {synthesizer['cli']} ({synthesizer['pane']})")
+
+    for i in range(rounds):
+        p = participants[i % len(participants)]
+        role = "opening" if i == 0 else "respond"
+        if i == 0:
+            prompt = question
+        else:
+            prev = transcript[-1]
+            prev_body = prev["result"] or prev["summary"] or "(empty)"
+            prompt = (
+                f"原始問題：{question}\n\n"
+                f"---\n"
+                f"以下是 {prev['label']} (Round {prev['round']}, {prev['cli']}) 的回應：\n\n"
+                f"{prev_body}\n"
+                f"---\n\n"
+                f"請以你的視角 critic / 補強 / 回應。同意請說明理由；"
+                f"不同意請給 counter argument。"
+            )
+
+        task_id = f"{base_id}-r{i+1}-{p['label']}"
+        print(
+            f"\n── Round {i+1}/{rounds}: {p['label']} "
+            f"({p['cli']} @ {p['pane']}) — {role} ──"
+        )
+        ok = _dispatch_one(
+            task_id=task_id, prompt=prompt, pane=p["pane"], role=p["label"],
+            base_id=base_id,
+            extra_meta={"debate_round": i + 1},
+        )
+        if not ok:
+            return
+
+        print(f"  ⏳ waiting up to {round_timeout}s for {p['label']}'s response...")
+        outcome = _wait_for_outcome(task_id, round_timeout)
+        transcript.append(
+            {**outcome, "round": i + 1, "label": p["label"], "cli": p["cli"]}
+        )
+        if outcome["status"] == "timeout":
+            print(f"  ⏱ timeout — debate halted at round {i+1}")
+            break
+        if outcome["status"] == "failed":
+            print(f"  ❌ {p['label']} failed: {outcome['error']}")
+            break
+        print(f"  ✅ {p['label']} done")
+
+    print(f"\n{'═' * 60}\n📜 Transcript ({len(transcript)} round(s))\n{'═' * 60}")
+    for entry in transcript:
+        body = entry["result"] or entry["summary"] or f"(empty — {entry['status']})"
+        print(
+            f"\n── Round {entry['round']}: {entry['label']} "
+            f"({entry['cli']}) [{entry['status']}] ──"
+        )
+        print(body)
+
+    if synthesizer and transcript:
+        print(
+            f"\n{'═' * 60}\n🔮 Synthesizer round "
+            f"({synthesizer['cli']} @ {synthesizer['pane']})\n{'═' * 60}"
+        )
+        synth_id = f"{base_id}-synth"
+        parts = [f"原始問題：{question}\n", f"以下是 {len(transcript)} 輪 debate transcript：\n"]
+        for entry in transcript:
+            body = entry["result"] or entry["summary"] or "(empty)"
+            parts.append(f"### Round {entry['round']}: {entry['label']} ({entry['cli']})\n{body}\n")
+        parts.append(
+            "---\n請 synthesize 上述 debate 成一份 refined position：\n"
+            "1. **Consensus** — 所有人同意的點\n"
+            "2. **Conflicts** — 主要分歧 + 各方論述\n"
+            "3. **Final Direction** — 你建議的 refined answer 與理由"
+        )
+        synth_prompt = "\n".join(parts)
+
+        ok = _dispatch_one(
+            task_id=synth_id, prompt=synth_prompt, pane=synthesizer["pane"],
+            role="synthesizer", base_id=base_id,
+            summary_text="synthesize debate transcript",
+        )
+        if not ok:
+            return
+
+        print(f"  ⏳ waiting up to {round_timeout}s for synthesis...")
+        outcome = _wait_for_outcome(synth_id, round_timeout)
+        if outcome["status"] == "timeout":
+            print(f"  ⏱ synthesizer timeout")
+        elif outcome["status"] == "failed":
+            print(f"  ❌ synthesizer failed: {outcome['error']}")
+        else:
+            print(f"  ✅ synthesis done\n")
+            print(outcome["result"] or outcome["summary"] or "(empty synthesis)")
+
+
 def main():
     p = argparse.ArgumentParser(prog="channel", description="Session Channel CLI")
     sub = p.add_subparsers(dest="cmd")
@@ -747,6 +997,43 @@ def main():
         help="Publish only; do NOT push the prompt into each pane via tmux send-keys",
     )
 
+    sp_debate = sub.add_parser(
+        "debate",
+        help=(
+            "Multi-round cross-CLI debate (alternating participants), with "
+            "optional synthesizer for final refinement"
+        ),
+    )
+    sp_debate.add_argument("message", help="The opening question to debate")
+    sp_debate.add_argument(
+        "--debate-id", required=True, dest="debate_id",
+        help="Base id; each round gets <base>-r<n>-<label>",
+    )
+    sp_debate.add_argument(
+        "--participants", required=True,
+        help=(
+            "Comma-separated participant spec — alternated round-robin. "
+            "Form: label:cli:pane or cli:pane (auto-label P1, P2). "
+            "Example: A:claude:%%5,B:codex:%%6"
+        ),
+    )
+    sp_debate.add_argument(
+        "--rounds", type=int, default=3,
+        help="Total debate rounds (default 3); alternates among participants",
+    )
+    sp_debate.add_argument(
+        "--synthesizer", default="",
+        help=(
+            "Optional final synthesizer cli:pane (e.g. gemini:%%7) — receives "
+            "the full transcript and produces a Consensus/Conflicts/Final Direction "
+            "summary"
+        ),
+    )
+    sp_debate.add_argument(
+        "--round-timeout", type=int, default=120, dest="round_timeout",
+        help="Per-round wait timeout in seconds (default 120)",
+    )
+
     args = p.parse_args()
     if not args.cmd:
         p.print_help()
@@ -760,6 +1047,7 @@ def main():
         "agents": cmd_agents,
         "tasks": cmd_tasks,
         "race": cmd_race,
+        "debate": cmd_debate,
     }
     try:
         fn[args.cmd](args)
