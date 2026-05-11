@@ -132,7 +132,10 @@ def _tmux_nudge(pane: str, topic: str) -> None:
 
 
 def cmd_read(args):
-    params = {"count": args.count}
+    # Default to "newest" so human-facing `channel read` shows the most recent
+    # messages first (XRANGE from 0-0 would always return the oldest, which
+    # surprised at least one Claude worker — see commit log).
+    params = {"count": args.count, "order": "oldest" if args.oldest else "newest"}
     r = httpx.get(
         f"{BASE_URL}/api/messages/{args.topic}",
         params=params,
@@ -255,6 +258,11 @@ def main():
     sp_read = sub.add_parser("read", help="Read messages from a topic")
     sp_read.add_argument("topic")
     sp_read.add_argument("--count", type=int, default=50)
+    sp_read.add_argument(
+        "--oldest",
+        action="store_true",
+        help="Show oldest N (xrange from 0-0); default shows newest N",
+    )
 
     sub.add_parser("topics", help="List active topics")
     sub.add_parser("health", help="Check station health")

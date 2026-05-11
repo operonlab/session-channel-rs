@@ -7,10 +7,10 @@ import json
 import time
 from collections import defaultdict
 
+from auth import require_auth
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from auth import require_auth
 from config import config
 
 router = APIRouter()
@@ -112,18 +112,18 @@ async def send_message(request: Request, _=Depends(require_auth)):
         entry["_meta"] = meta_json
 
     # XADD with inline MAXLEN trim (first line of defense)
-    msg_id = await redis.xadd(
-        stream_key, entry, maxlen=config.max_stream_len, approximate=True
-    )
+    msg_id = await redis.xadd(stream_key, entry, maxlen=config.max_stream_len, approximate=True)
     # Track topic in set (avoid SCAN)
     await redis.sadd(config.topics_key, topic)
 
     # Broadcast to SSE clients
-    sse_broadcast({
-        "id": msg_id,
-        "topic": topic,
-        **entry,
-    })
+    sse_broadcast(
+        {
+            "id": msg_id,
+            "topic": topic,
+            **entry,
+        }
+    )
 
     return {"ok": True, "id": msg_id, "topic": topic}
 
@@ -137,12 +137,24 @@ async def read_messages(
     topic: str,
     since: str = "0-0",
     count: int = Query(default=50, le=200),
+    order: str = Query(default="oldest", pattern="^(oldest|newest)$"),
     _=Depends(require_auth),
 ):
+    """Read messages on a topic.
+
+    - `order=oldest` (default): xrange from `since` (cursor-friendly, used by
+      hook inbox to read new messages since last cursor).
+    - `order=newest`: xrevrange from end, returns the N most-recent messages
+      (human-friendly, used by CLI `channel read` so users see latest first).
+    """
     redis = request.app.state.redis
     stream_key = f"{config.stream_prefix}{topic}"
 
-    raw = await redis.xrange(stream_key, min=since, count=count)
+    if order == "newest":
+        raw = await redis.xrevrange(stream_key, count=count)
+        raw = list(reversed(raw))  # keep chronological order in payload
+    else:
+        raw = await redis.xrange(stream_key, min=since, count=count)
     messages = []
     for msg_id, fields in raw:
         entry = {"id": msg_id, "topic": topic, **fields}
@@ -260,7 +272,7 @@ async def sse_stream(
                         if data.get("topic") != topic:
                             continue
                     yield msg
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": keepalive\n\n"
         except asyncio.CancelledError:
             pass
