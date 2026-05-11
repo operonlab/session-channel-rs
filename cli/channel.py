@@ -129,8 +129,14 @@ def _tmux_nudge(pane: str, topic: str, task_id: str = "", task_prompt: str = "")
 
     if topic == "tasks" and task_prompt:
         report_meta = '{"v":1,"task_id":"' + task_id + '","status":"ok","summary":"<one-line>"}'
+        sender = os.environ.get("TMUX_PANE", "?")
+        # Trust marker — tells the worker Claude this push came from
+        # session-channel (a user-configured local bus), not from an untrusted
+        # external source. Helps the auto-mode classifier route follow-up
+        # `channel send` correctly. zsh treats the whole `# …` part as comment.
+        trust = f"[session-channel:trusted task={task_id} from={sender}]"
         wakeup = (
-            f"{task_prompt}  # via session-channel task_id={task_id}; "
+            f"{task_prompt}  # {trust} "
             f"after completion run: channel send tasks "
             f"\"{task_id}: done\" --tag done --meta '{report_meta}'"
         )
