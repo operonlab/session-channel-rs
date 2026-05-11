@@ -23,15 +23,6 @@
   button:hover { opacity: 0.85; }
   button.secondary { background: var(--overlay); color: var(--subtext); }
 
-  /* Two-column layout: board panel | message log */
-  #main { flex: 1; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 1px; background: var(--overlay); overflow: hidden; min-height: 0; }
-  @media (max-width: 900px) { #main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
-  .pane { background: var(--base); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
-  .pane-header { background: var(--surface); padding: 6px 12px; border-bottom: 1px solid var(--overlay); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
-  .pane-header h2 { font-size: 12px; color: var(--mauve); font-weight: 600; }
-  .pane-body { flex: 1; overflow-y: auto; padding: 8px 12px; }
-
-  /* Message log (right pane) */
   #log { flex: 1; overflow-y: auto; padding: 8px 16px; }
   .msg { padding: 3px 0; line-height: 1.5; border-left: 3px solid transparent; padding-left: 8px; }
   .msg.high { border-left-color: var(--peach); }
@@ -45,58 +36,6 @@
   footer input { flex: 1; }
   #topic-input { width: 120px; flex: none; }
   .counter { color: var(--subtext); font-size: 11px; margin-left: auto; }
-
-  /* Board panel */
-  .summary-bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--overlay); font-size: 12px; flex-wrap: wrap; }
-  .summary-bar .stat { display: flex; gap: 4px; align-items: baseline; }
-  .summary-bar .stat .label { color: var(--subtext); }
-  .summary-bar .stat .value { color: var(--text); font-weight: 600; }
-  .summary-bar .progress-track { flex: 1; min-width: 120px; height: 6px; background: var(--overlay); border-radius: 3px; overflow: hidden; position: relative; }
-  .summary-bar .progress-fill { height: 100%; background: var(--green); transition: width 0.3s ease; }
-
-  .task-card { background: var(--surface); border: 1px solid var(--overlay); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
-  .task-card .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .task-card .status-icon { font-size: 14px; width: 18px; text-align: center; }
-  .task-card .status-icon.open { color: var(--subtext); }
-  .task-card .status-icon.claimed { color: var(--yellow); }
-  .task-card .status-icon.done { color: var(--green); }
-  .task-card .status-icon.failed { color: var(--red); }
-  .task-card .status-icon.blocked { color: var(--peach); }
-  .task-card .task-id { color: var(--subtext); font-size: 11px; }
-  .task-card .task-desc { color: var(--text); flex: 1; min-width: 100px; }
-  .task-card .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; line-height: 1.4; }
-  .badge.class-short { background: var(--green); color: var(--base); }
-  .badge.class-llm { background: var(--yellow); color: var(--base); }
-  .badge.class-video { background: var(--mauve); color: var(--base); }
-  .badge.cap { background: var(--blue); color: var(--base); }
-  .badge.pane { background: var(--overlay); color: var(--teal); border: 1px solid var(--teal); }
-  .badge.lease-ok { background: var(--overlay); color: var(--green); border: 1px solid var(--green); }
-  .badge.lease-warn { background: var(--overlay); color: var(--peach); border: 1px solid var(--peach); }
-  .badge.lease-expired { background: var(--red); color: var(--base); }
-
-  .task-progress { margin-top: 6px; }
-  .task-progress .track { height: 5px; background: var(--overlay); border-radius: 3px; overflow: hidden; }
-  .task-progress .fill { height: 100%; background: var(--blue); transition: width 0.3s ease; }
-  .task-progress .meta { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--subtext); margin-top: 3px; }
-  .task-progress .pct { color: var(--blue); font-weight: 600; }
-
-  .task-result { margin-top: 6px; padding: 4px 8px; background: var(--overlay); border-radius: 3px; font-size: 11px; color: var(--subtext); }
-  .task-result.success { border-left: 3px solid var(--green); }
-  .task-result.failed { border-left: 3px solid var(--red); }
-  .task-result .kv { color: var(--text); margin-right: 8px; }
-
-  .empty-state { color: var(--subtext); padding: 16px; text-align: center; font-style: italic; }
-
-  /* Capability panel */
-  .cap-panel { border-top: 1px solid var(--overlay); padding: 8px 12px; background: var(--surface); max-height: 30%; overflow-y: auto; }
-  .cap-panel h3 { font-size: 11px; color: var(--mauve); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .pane-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 0; border-bottom: 1px dashed var(--overlay); font-size: 11px; }
-  .pane-row:last-child { border-bottom: none; }
-  .pane-row .pid { color: var(--teal); font-weight: 600; }
-  .pane-row .cli { color: var(--blue); }
-  .pane-row .seen { color: var(--subtext); margin-left: auto; }
-
-  #board-input { width: 160px; flex: none; }
 </style>
 </head>
 <body>
@@ -108,39 +47,7 @@
   <span class="counter" id="counter">0 msgs</span>
 </header>
 
-<div id="main">
-  <!-- Board Panel -->
-  <section class="pane" id="board-panel">
-    <div class="pane-header">
-      <h2>Board</h2>
-      <input id="board-input" placeholder="board_id" value="demo-board">
-      <button id="board-load-btn">Load</button>
-      <span id="board-status" class="counter"></span>
-    </div>
-    <div class="summary-bar" id="board-summary" style="display:none;">
-      <span class="stat"><span class="label">total</span><span class="value" id="sum-total">0</span></span>
-      <span class="stat"><span class="label">open</span><span class="value" id="sum-open">0</span></span>
-      <span class="stat"><span class="label">claimed</span><span class="value" id="sum-claimed">0</span></span>
-      <span class="stat"><span class="label">done</span><span class="value" id="sum-done">0</span></span>
-      <div class="progress-track"><div class="progress-fill" id="sum-progress" style="width:0%"></div></div>
-      <span class="stat"><span class="value" id="sum-pct">0%</span></span>
-    </div>
-    <div class="pane-body" id="board-tasks">
-      <div class="empty-state">Enter a board_id and click Load.</div>
-    </div>
-    <!-- Capability Panel -->
-    <div class="cap-panel" id="cap-panel">
-      <h3>Active Panes <span class="counter" id="panes-count"></span></h3>
-      <div id="panes-list"><div class="empty-state">No panes advertised.</div></div>
-    </div>
-  </section>
-
-  <!-- Message Log -->
-  <section class="pane">
-    <div class="pane-header"><h2>Message Log</h2></div>
-    <div id="log"></div>
-  </section>
-</div>
+<div id="log"></div>
 
 <footer>
   <input id="topic-input" placeholder="topic" value="broadcast">
@@ -160,270 +67,11 @@
   const prioritySelect = document.getElementById('priority-select');
   const sendBtn = document.getElementById('send-btn');
 
-  // Board panel elements
-  const boardInput = document.getElementById('board-input');
-  const boardLoadBtn = document.getElementById('board-load-btn');
-  const boardStatus = document.getElementById('board-status');
-  const boardSummary = document.getElementById('board-summary');
-  const boardTasks = document.getElementById('board-tasks');
-  const sumTotal = document.getElementById('sum-total');
-  const sumOpen = document.getElementById('sum-open');
-  const sumClaimed = document.getElementById('sum-claimed');
-  const sumDone = document.getElementById('sum-done');
-  const sumProgress = document.getElementById('sum-progress');
-  const sumPct = document.getElementById('sum-pct');
-  const panesCount = document.getElementById('panes-count');
-  const panesList = document.getElementById('panes-list');
-
   let paused = false, msgCount = 0, autoScroll = true;
   const seenTopics = new Set();
-
-  // ------------------------------------------------------------------ //
-  // Board state                                                        //
-  // ------------------------------------------------------------------ //
-  let currentBoardId = null;
-  let currentProjection = null; // last fetched projection
-  let leaseTimerHandle = null;  // setInterval handle for lease countdowns
-  let boardReloadDebounce = null;
-
   const FETCH_OPTS = { credentials: 'same-origin' };
 
   function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
-
-  function statusIcon(status) {
-    switch (status) {
-      case 'open': return { ch: '○', cls: 'open' };       // ○
-      case 'claimed': return { ch: '◌', cls: 'claimed' }; // ◌
-      case 'done': return { ch: '●', cls: 'done' };       // ●
-      case 'failed': return { ch: '✕', cls: 'failed' };   // ✕
-      case 'blocked': return { ch: '🔒', cls: 'blocked' }; // 🔒
-      default: return { ch: '?', cls: 'open' };
-    }
-  }
-
-  function classBadge(cls) {
-    const known = ['short', 'llm', 'video'];
-    const c = known.includes(cls) ? cls : 'short';
-    return `<span class="badge class-${c}">${esc(cls || 'short')}</span>`;
-  }
-
-  function formatLeaseRemaining(leaseUntilSec) {
-    if (!leaseUntilSec) return null;
-    const nowSec = Math.floor(Date.now() / 1000);
-    const remaining = leaseUntilSec - nowSec;
-    if (remaining <= 0) return { text: 'expired', cls: 'lease-expired' };
-    const m = Math.floor(remaining / 60);
-    const s = remaining % 60;
-    const text = m > 0 ? `${m}m${String(s).padStart(2,'0')}s` : `${s}s`;
-    const cls = remaining < 30 ? 'lease-warn' : 'lease-ok';
-    return { text, cls };
-  }
-
-  function relTime(epochSec) {
-    if (!epochSec) return '?';
-    const diff = Math.floor(Date.now() / 1000) - epochSec;
-    if (diff < 5) return 'now';
-    if (diff < 60) return diff + 's ago';
-    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-    return Math.floor(diff / 3600) + 'h ago';
-  }
-
-  function renderTaskCard(task) {
-    const icon = statusIcon(task.status);
-    const taskClass = task.task_class || 'short';
-    const caps = (task.required_caps || []).map(c => `<span class="badge cap">${esc(c)}</span>`).join(' ');
-    let claimedHtml = '';
-    if (task.claimed_by) claimedHtml = `<span class="badge pane">@${esc(task.claimed_by)}</span>`;
-    let leaseHtml = '';
-    const lease = formatLeaseRemaining(task.lease_until);
-    if (lease) leaseHtml = `<span class="badge ${lease.cls}" data-lease-until="${task.lease_until}">lease ${esc(lease.text)}</span>`;
-
-    let progressHtml = '';
-    if (task.progress && typeof task.progress.percent === 'number') {
-      const pct = Math.max(0, Math.min(100, task.progress.percent));
-      const stage = task.progress.stage || '';
-      const note = task.progress.note || '';
-      progressHtml = `
-        <div class="task-progress">
-          <div class="track"><div class="fill" style="width:${pct}%"></div></div>
-          <div class="meta">
-            <span class="pct">${pct}%</span>
-            ${stage ? `<span>${esc(stage)}</span>` : ''}
-            ${note ? `<span>${esc(note)}</span>` : ''}
-          </div>
-        </div>`;
-    }
-
-    let resultHtml = '';
-    if (task.result) {
-      const r = task.result;
-      const rcls = r.status === 'failed' ? 'failed' : 'success';
-      const parts = [];
-      if (r.status) parts.push(`<span class="kv">${esc(r.status)}</span>`);
-      if (typeof r.tokens_used === 'number') parts.push(`tokens=${r.tokens_used}`);
-      if (typeof r.duration_ms === 'number') parts.push(`${r.duration_ms}ms`);
-      if (r.summary) parts.push(esc(r.summary));
-      resultHtml = `<div class="task-result ${rcls}">${parts.join(' · ') || 'completed'}</div>`;
-    }
-
-    return `
-      <div class="task-card" data-task-id="${esc(task.id)}" data-task-class="${esc(taskClass)}">
-        <div class="row">
-          <span class="status-icon ${icon.cls}">${icon.ch}</span>
-          <span class="task-id">${esc(task.id)}</span>
-          ${classBadge(taskClass)}
-          <span class="task-desc">${esc(task.desc || '')}</span>
-        </div>
-        <div class="row" style="margin-top:4px;">
-          ${caps}
-          ${claimedHtml}
-          ${leaseHtml}
-        </div>
-        ${progressHtml}
-        ${resultHtml}
-      </div>`;
-  }
-
-  function renderProjection(projection) {
-    if (!projection || !projection.tasks) {
-      boardTasks.innerHTML = '<div class="empty-state">No tasks.</div>';
-      boardSummary.style.display = 'none';
-      return;
-    }
-    const s = projection.summary || {};
-    sumTotal.textContent = s.total || 0;
-    sumOpen.textContent = s.open || 0;
-    sumClaimed.textContent = s.claimed || 0;
-    sumDone.textContent = s.done || 0;
-    const pct = s.total ? Math.round((s.done || 0) * 100 / s.total) : 0;
-    sumProgress.style.width = pct + '%';
-    sumPct.textContent = pct + '%';
-    boardSummary.style.display = 'flex';
-
-    if (!projection.tasks.length) {
-      boardTasks.innerHTML = '<div class="empty-state">No tasks on this board.</div>';
-      return;
-    }
-    boardTasks.innerHTML = projection.tasks.map(renderTaskCard).join('');
-  }
-
-  async function loadBoard(boardId) {
-    if (!boardId) return;
-    currentBoardId = boardId;
-    boardStatus.textContent = 'loading…';
-    try {
-      const r = await fetch(`/api/board/${encodeURIComponent(boardId)}`, FETCH_OPTS);
-      if (r.status === 404) {
-        currentProjection = { board_id: boardId, tasks: [], summary: {total:0, open:0, claimed:0, done:0} };
-        renderProjection(currentProjection);
-        boardStatus.textContent = '404 (empty)';
-        return;
-      }
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      currentProjection = await r.json();
-      renderProjection(currentProjection);
-      boardStatus.textContent = 'ok';
-    } catch (e) {
-      console.error('loadBoard', e);
-      boardStatus.textContent = 'err: ' + (e.message || e);
-    }
-  }
-
-  function reloadBoardDebounced(delay = 200) {
-    if (!currentBoardId) return;
-    if (boardReloadDebounce) clearTimeout(boardReloadDebounce);
-    boardReloadDebounce = setTimeout(() => loadBoard(currentBoardId), delay);
-  }
-
-  // Apply progress event locally (without full projection re-fetch)
-  function applyProgressLocal(taskId, percent, stage, note) {
-    if (!currentProjection || !currentProjection.tasks) return;
-    const task = currentProjection.tasks.find(t => t.id === taskId);
-    if (!task) {
-      // Unknown task — fall back to full reload
-      reloadBoardDebounced(100);
-      return;
-    }
-    task.progress = {
-      percent: Number.isFinite(percent) ? percent : 0,
-      stage: stage || '',
-      note: note || '',
-      last_seen: Math.floor(Date.now() / 1000),
-    };
-    // Re-render only this card
-    const card = boardTasks.querySelector(`.task-card[data-task-id="${CSS.escape(taskId)}"]`);
-    if (card) {
-      card.outerHTML = renderTaskCard(task);
-    } else {
-      reloadBoardDebounced(100);
-    }
-  }
-
-  // Heartbeat resets lease countdown — recompute lease_until from class budget.
-  function applyHeartbeatLocal(taskId) {
-    if (!currentProjection || !currentProjection.tasks) return;
-    const task = currentProjection.tasks.find(t => t.id === taskId);
-    if (!task) return;
-    // We don't know per-class lease seconds here; use a coarse refresh by reloading.
-    // (Server-side projection is the authoritative source.)
-    reloadBoardDebounced(150);
-  }
-
-  // Periodic lease countdown ticker — updates badges in place every second.
-  function startLeaseTicker() {
-    if (leaseTimerHandle) return;
-    leaseTimerHandle = setInterval(() => {
-      const badges = boardTasks.querySelectorAll('.badge[data-lease-until]');
-      badges.forEach(b => {
-        const until = parseInt(b.dataset.leaseUntil, 10);
-        const lease = formatLeaseRemaining(until);
-        if (!lease) return;
-        b.classList.remove('lease-ok', 'lease-warn', 'lease-expired');
-        b.classList.add(lease.cls);
-        b.textContent = 'lease ' + lease.text;
-      });
-    }, 1000);
-  }
-
-  // ------------------------------------------------------------------ //
-  // Capability panel                                                   //
-  // ------------------------------------------------------------------ //
-
-  function renderPanes(panes) {
-    if (!panes || !panes.length) {
-      panesList.innerHTML = '<div class="empty-state">No panes advertised.</div>';
-      panesCount.textContent = '';
-      return;
-    }
-    panesCount.textContent = `(${panes.length})`;
-    panesList.innerHTML = panes.map(p => {
-      const mcps = (p.mcps || []).map(m => `<span class="badge cap">${esc(m)}</span>`).join(' ');
-      const skills = (p.skills || []).map(s => `<span class="badge cap" style="background:var(--mauve)">${esc(s)}</span>`).join(' ');
-      return `
-        <div class="pane-row">
-          <span class="pid">${esc(p.pane_id || '?')}</span>
-          <span class="cli">${esc(p.cli_type || '?')}</span>
-          ${mcps}
-          ${skills}
-          <span class="seen">seen ${esc(relTime(p.last_seen))}</span>
-        </div>`;
-    }).join('');
-  }
-
-  async function loadPanes() {
-    try {
-      const r = await fetch('/api/panes', FETCH_OPTS);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      renderPanes(data.panes || []);
-    } catch (e) {
-      // silent — capability panel is best-effort
-    }
-  }
-
-  // ------------------------------------------------------------------ //
-  // SSE — single connection feeds both message log and board panel     //
-  // ------------------------------------------------------------------ //
 
   let es = null;
   let reconnectDelay = 1000;
@@ -448,52 +96,19 @@
       try {
         const d = JSON.parse(e.data);
         handleMsg(d);
-        handleBoardEvent(d);
       } catch (err) { console.error(err); }
     };
   }
 
-  function handleBoardEvent(d) {
-    if (!currentBoardId) return;
-    const expectedTopic = 'board:' + currentBoardId;
-    if (d.topic !== expectedTopic) return;
-    const tag = d.tag || '';
-    switch (tag) {
-      case 'progress': {
-        const pct = parseInt(d.percent, 10);
-        applyProgressLocal(d.task_id, isNaN(pct) ? 0 : pct, d.stage || '', d.note || '');
-        break;
-      }
-      case 'heartbeat':
-        applyHeartbeatLocal(d.task_id);
-        break;
-      case 'publish':
-      case 'claim':
-      case 'done':
-      case 'release':
-      case 'drop':
-      case 'failed':
-      case 'cap_rejected':
-        reloadBoardDebounced(150);
-        break;
-      default:
-        // unknown tag — be conservative and reload
-        reloadBoardDebounced(300);
-    }
-  }
-
   function handleMsg(d) {
-    // Track topics
     if (d.topic && !seenTopics.has(d.topic)) {
       seenTopics.add(d.topic);
       const opt = document.createElement('option');
       opt.value = d.topic; opt.textContent = d.topic;
       filter.appendChild(opt);
     }
-    // Apply topic filter
     const f = filter.value;
     if (f && d.topic !== f) return;
-    // Build message line
     const div = document.createElement('div');
     div.className = 'msg' + (d.priority === 'high' ? ' high' : '');
     const ts = new Date().toLocaleTimeString('en-GB', {hour12: false});
@@ -509,22 +124,15 @@
     }
   }
 
-  // ------------------------------------------------------------------ //
-  // Existing controls                                                  //
-  // ------------------------------------------------------------------ //
-
-  // Pause
   pauseBtn.onclick = () => {
     paused = !paused;
     pauseBtn.textContent = paused ? 'Resume' : 'Pause';
   };
 
-  // Scroll detection
   log.addEventListener('scroll', () => {
     autoScroll = (log.scrollTop + log.clientHeight >= log.scrollHeight - 30);
   });
 
-  // Filter change: reload history
   filter.addEventListener('change', async () => {
     log.innerHTML = ''; msgCount = 0; counter.textContent = '0 msgs';
     const topic = filter.value;
@@ -536,7 +144,6 @@
     } catch(e) { console.error(e); }
   });
 
-  // Send
   async function doSend() {
     const topic = topicInput.value.trim();
     const text = msgInput.value.trim();
@@ -557,19 +164,6 @@
   sendBtn.onclick = doSend;
   msgInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSend(); });
 
-  // Board load button
-  boardLoadBtn.onclick = () => {
-    const id = boardInput.value.trim();
-    if (id) loadBoard(id);
-  };
-  boardInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      const id = boardInput.value.trim();
-      if (id) loadBoard(id);
-    }
-  });
-
-  // Load initial topics
   fetch('/api/topics', FETCH_OPTS).then(r => r.json()).then(data => {
     (data.topics || []).forEach(t => {
       if (!seenTopics.has(t.topic)) {
@@ -582,9 +176,6 @@
   }).catch(() => {});
 
   connectSSE();
-  startLeaseTicker();
-  loadPanes();
-  setInterval(loadPanes, 30000);
 })();
 </script>
 </body>
