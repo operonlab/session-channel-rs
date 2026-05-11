@@ -189,7 +189,14 @@
   let paused = false, msgCount = 0, autoScroll = true;
   let selectedSender = null;
   const seenTopics = new Set();
-  const FETCH_OPTS  = { credentials: 'same-origin' };
+  // localhost-direct dashboard: server injects <meta name="local-key">
+  // so JS can auth fetch + SSE without a workshop_session cookie.
+  const _metaKeyEl = document.querySelector('meta[name="local-key"]');
+  const LOCAL_KEY = _metaKeyEl ? _metaKeyEl.getAttribute('content') : '';
+  const FETCH_OPTS = {
+    credentials: 'same-origin',
+    headers: LOCAL_KEY ? { 'X-Local-Key': LOCAL_KEY } : {},
+  };
   const agentCountEl = document.getElementById('agent-count');
 
   // agent state: Map<agentKey, { lastTs, lastText, lastTag, sender, meta, cardEl }>
@@ -435,7 +442,8 @@
 
   function connectSSE() {
     try { if (es) es.close(); } catch (_) {}
-    es = new EventSource('/api/stream');
+    const sseUrl = '/api/stream' + (LOCAL_KEY ? `?key=${encodeURIComponent(LOCAL_KEY)}` : '');
+    es = new EventSource(sseUrl);
     es.onopen = () => {
       dot.className = 'status-dot connected';
       dot.title = 'Connected';
@@ -486,9 +494,11 @@
     if (!topic || !text) return;
     sendBtn.disabled = true;
     try {
+      const sendHeaders = { 'Content-Type': 'application/json' };
+      if (LOCAL_KEY) sendHeaders['X-Local-Key'] = LOCAL_KEY;
       await fetch('/api/messages', {
         method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
+        headers: sendHeaders,
         body: JSON.stringify({ topic, text, sender: 'dashboard', priority: prioritySel.value }),
       });
       msgInput.value = '';

@@ -11,8 +11,9 @@ _serializer = URLSafeTimedSerializer(config.secret_key)
 
 
 async def require_auth(request: Request) -> dict:
-    """FastAPI dependency — validate workshop_session cookie or X-Local-Key header."""
-    local_key = request.headers.get("x-local-key")
+    """FastAPI dependency — validate workshop_session cookie, X-Local-Key header,
+    or a `key=` query param (fallback for EventSource which can't set headers)."""
+    local_key = request.headers.get("x-local-key") or request.query_params.get("key")
     if local_key and local_key == config.secret_key:
         return {"status": "active", "source": "local-key"}
 

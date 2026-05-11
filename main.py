@@ -127,7 +127,12 @@ app.include_router(router)
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    return HTMLResponse(_TEMPLATE_PATH.read_text())
+    """Inject local-key into the page so the JS can authenticate fetch + SSE
+    when the user opens the station dashboard directly (no nginx cookie)."""
+    html = _TEMPLATE_PATH.read_text()
+    inject = f'<meta name="local-key" content="{config.secret_key}">'
+    html = html.replace("</head>", f"  {inject}\n</head>", 1)
+    return HTMLResponse(html)
 
 
 def cli():
