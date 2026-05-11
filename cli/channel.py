@@ -64,7 +64,8 @@ def cmd_send(args):
     # Optional push: nudge target pane(s) via tmux send-keys so they don't have
     # to wait for the next user prompt. The message is published either way;
     # this just shortens the latency at the cost of typing into target pane.
-    if args.notify:
+    # `--notify-target X` implicitly turns push on (saves a flag).
+    if args.notify or args.notify_target:
         targets = []
         explicit = args.notify_target or meta_dict.get("target_pane")
         if explicit:
@@ -106,7 +107,10 @@ def _tmux_nudge(pane: str, topic: str) -> None:
 
     if not pane.startswith("%"):
         pane = "%" + pane.lstrip("%")
-    wakeup = f"/channel read {topic} --count 5"
+    # Use the raw CLI form (no slash) — works both for zsh (PATH lookup) and
+    # Claude Code (which will execute it via Bash tool). The slash form
+    # "/channel ..." would error in zsh: "no such file or directory: /channel".
+    wakeup = f"channel read {topic} --count 5"
     try:
         # send the prompt text
         subprocess.run(  # noqa: S603
