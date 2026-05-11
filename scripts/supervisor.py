@@ -259,7 +259,11 @@ def run_once(config: dict, dry_run: bool) -> None:
                 ok = spawn_worker(pane_id, cli_type, dry_run)
                 if ok:
                     log(f"  {pane_id}: respawned {cli_type} (was idle {elapsed:.0f}s)")
-                    clear_exit_record(pane_id)
+                    # Only clear the timestamp on a real spawn — dry-run must
+                    # preserve state so re-running shows the same readiness
+                    # without resetting the grace timer.
+                    if not dry_run:
+                        clear_exit_record(pane_id)
                 else:
                     log(f"  {pane_id}: respawn failed — will retry next cycle")
 
