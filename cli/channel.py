@@ -469,6 +469,160 @@ def cmd_tasks(args):
                     print(f"  ⚠️  publish error for {tid}: {e}", file=sys.stderr)
 
 
+def _parse_workers(spec: str) -> list[tuple[str, str]]:
+    """Parse 'claude:%5,codex:%6,gemini:%7' into [(cli, pane), ...].
+
+    pane is normalised so '%5' and '5' both yield '%5'.
+    """
+    out: list[tuple[str, str]] = []
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if ":" not in chunk:
+            raise ValueError(
+                f"worker spec '{chunk}' must be 'cli:pane' (e.g. claude:%5)"
+            )
+        cli, pane = chunk.split(":", 1)
+        cli = cli.strip().lower()
+        pane = pane.strip()
+        if not pane:
+            raise ValueError(f"worker spec '{chunk}' missing pane id")
+        if not pane.startswith("%"):
+            pane = "%" + pane.lstrip("%")
+        if not cli:
+            raise ValueError(f"worker spec '{chunk}' missing cli name")
+        out.append((cli, pane))
+    return out
+
+
+def cmd_race(args):
+    """Race the same prompt across N workers; one assign per worker, one
+    done-track per worker. Reuses the tasks-topic schema so `channel tasks`
+    shows results in the same status table.
+
+    Each worker gets task_id = "<base>-<cli>" so done/failed events match
+    cleanly. `_meta.race_base_id` lets downstream tooling filter results.
+    """
+    import json as _json
+    import time as _t
+
+    try:
+        workers = _parse_workers(args.workers)
+    except ValueError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(2)
+    if not workers:
+        print(
+            "❌ --workers required, e.g. --workers claude:%5,codex:%6,gemini:%7",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    base_id = args.task_id
+    prompt = args.message
+
+    extra_meta: dict = {}
+    if args.meta:
+        try:
+            parsed = _json.loads(args.meta)
+            if not isinstance(parsed, dict):
+                raise ValueError("--meta must be a JSON object")
+            extra_meta = parsed
+        except (_json.JSONDecodeError, ValueError) as e:
+            print(f"❌ --meta invalid: {e}", file=sys.stderr)
+            sys.exit(2)
+
+    task_ids: list[str] = []
+    print(f"🏁 race: {len(workers)} worker(s), base_id={base_id}")
+
+    for cli, pane in workers:
+        task_id = f"{base_id}-{cli}"
+        task_ids.append(task_id)
+        meta = {
+            "v": 1,
+            "task_id": task_id,
+            "race_base_id": base_id,
+            "race_cli": cli,
+            "target_pane": pane,
+            "prompt": prompt,
+        }
+        meta.update(extra_meta)
+
+        body = {
+            "topic": "tasks",
+            "text": prompt,
+            "sender": _default_sender(),
+            "priority": "normal",
+            "tag": "assign",
+            "_meta": meta,
+        }
+        try:
+            r = httpx.post(
+                f"{BASE_URL}/api/messages",
+                json=body,
+                headers=HEADERS,
+                timeout=TIMEOUT,
+            )
+            if r.status_code != 200:
+                print(
+                    f"  ⚠️  {cli} ({pane}): publish failed HTTP {r.status_code}",
+                    file=sys.stderr,
+                )
+                continue
+            rid = r.json().get("id", "?")
+            print(f"  ✅ [tasks] {task_id} → {cli} ({pane}) id={rid}")
+        except httpx.HTTPError as e:
+            print(f"  ⚠️  {cli} ({pane}): publish error {e}", file=sys.stderr)
+            continue
+
+        if not args.no_notify:
+            _tmux_nudge(pane, "tasks", task_id=task_id, task_prompt=prompt)
+
+    if args.wait <= 0:
+        print(
+            "\n→ Watch progress: channel tasks --pending  "
+            "(or rerun: channel race ... --wait 300)"
+        )
+        return
+
+    deadline = _t.time() + args.wait
+    pending = set(task_ids)
+    print(f"\n⏳ waiting up to {args.wait}s for {len(pending)} task(s)...")
+
+    while pending and _t.time() < deadline:
+        _t.sleep(5)
+        try:
+            rr = httpx.get(
+                f"{BASE_URL}/api/messages/tasks",
+                params={"count": 200, "order": "oldest"},
+                headers=HEADERS,
+                timeout=TIMEOUT,
+            )
+            msgs = rr.json().get("messages", [])
+        except httpx.HTTPError:
+            continue
+        for m in msgs:
+            mt = m.get("_meta") or {}
+            if isinstance(mt, str):
+                try:
+                    mt = _json.loads(mt)
+                except _json.JSONDecodeError:
+                    mt = {}
+            tid = str(mt.get("task_id") or _parse_task_id(m.get("text", "")) or "")
+            if tid in pending and m.get("tag") in ("done", "failed"):
+                pending.discard(tid)
+                print(f"  [{m.get('tag')}] {tid}")
+
+    if pending:
+        print(
+            f"\n⏱ {len(pending)} task(s) still pending after {args.wait}s: "
+            + ", ".join(sorted(pending))
+        )
+    else:
+        print(f"\n🏁 all {len(task_ids)} race task(s) settled")
+
+
 def main():
     p = argparse.ArgumentParser(prog="channel", description="Session Channel CLI")
     sub = p.add_subparsers(dest="cmd")
@@ -546,6 +700,53 @@ def main():
         ),
     )
 
+    sp_race = sub.add_parser(
+        "race",
+        help=(
+            "Race the same prompt across N workers (one assign per worker, "
+            "shared task base id; results land in the tasks topic)"
+        ),
+    )
+    sp_race.add_argument("message", help="Prompt to send to every worker")
+    sp_race.add_argument(
+        "--task-id",
+        required=True,
+        dest="task_id",
+        help=(
+            "Base task id; each worker gets <base>-<cli> so done/failed "
+            "events match cleanly (e.g. retry-policy-claude)"
+        ),
+    )
+    sp_race.add_argument(
+        "--workers",
+        required=True,
+        help=(
+            "Comma-separated cli:pane list, e.g. "
+            "claude:%%5,codex:%%6,gemini:%%7"
+        ),
+    )
+    sp_race.add_argument(
+        "--meta",
+        default="",
+        help="Extra JSON object merged into each worker's _meta",
+    )
+    sp_race.add_argument(
+        "--wait",
+        type=int,
+        default=0,
+        help=(
+            "Poll the tasks stream until all workers settle or this many "
+            "seconds elapse (default 0 = fire-and-forget, watch via "
+            "`channel tasks --pending`)"
+        ),
+    )
+    sp_race.add_argument(
+        "--no-notify",
+        action="store_true",
+        dest="no_notify",
+        help="Publish only; do NOT push the prompt into each pane via tmux send-keys",
+    )
+
     args = p.parse_args()
     if not args.cmd:
         p.print_help()
@@ -558,6 +759,7 @@ def main():
         "health": cmd_health,
         "agents": cmd_agents,
         "tasks": cmd_tasks,
+        "race": cmd_race,
     }
     try:
         fn[args.cmd](args)
