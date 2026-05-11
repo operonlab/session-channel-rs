@@ -30,6 +30,8 @@ def cmd_health(_args):
 
 
 def cmd_send(args):
+    import json as _json
+
     body = {
         "topic": args.topic,
         "text": args.message,
@@ -38,6 +40,16 @@ def cmd_send(args):
     }
     if args.tag:
         body["tag"] = args.tag
+    if args.meta:
+        try:
+            meta = _json.loads(args.meta)
+        except _json.JSONDecodeError as e:
+            print(f"❌ --meta must be valid JSON: {e}", file=sys.stderr)
+            sys.exit(2)
+        if not isinstance(meta, dict):
+            print("❌ --meta must be a JSON object (got list/string/etc)", file=sys.stderr)
+            sys.exit(2)
+        body["_meta"] = meta
     r = httpx.post(f"{BASE_URL}/api/messages", json=body, headers=HEADERS, timeout=TIMEOUT)
     if r.status_code == 200:
         d = r.json()
@@ -153,6 +165,7 @@ def main():
     sp_send.add_argument("--tag", default="")
     sp_send.add_argument("--priority", default="normal", choices=["normal", "high"])
     sp_send.add_argument("--sender", default="")
+    sp_send.add_argument("--meta", default="", help="JSON object attached as _meta")
 
     sp_read = sub.add_parser("read", help="Read messages from a topic")
     sp_read.add_argument("topic")
