@@ -1,15 +1,21 @@
-/// E2E HTTP parity tests — Rust service (:10120) vs Python service (:10101)
+/// E2E HTTP parity tests — Rust service (ephemeral port) vs Python service (:10101)
 ///
 /// Design:
-/// - Boots the `channel-service` binary once via OnceLock (serial execution)
-/// - Hits BOTH services with identical inputs, compares parsed JSON
-/// - Uses the same Redis backend — write to Rust, read from both, or vice-versa
-/// - All test topics are prefixed `e2e-parity-` and cleaned up after each test
+/// - Each test boots its own `channel-service` binary on a free ephemeral port
+///   (picked at runtime via TcpListener bind :0). ServiceGuard kills the child
+///   on Drop, so parallel `cargo test` is safe with no --test-threads=1 needed.
+/// - Hits BOTH services with identical inputs, compares parsed JSON.
+/// - Uses the same Redis backend — write to Rust, read from both, or vice-versa.
+/// - All test topics are prefixed `e2e-parity-` and cleaned up after each test.
 /// - Auth key: "change-me-in-production" (default from config.py)
+///
+/// Legacy OnceLock kept as `SHARED_SERVICE` for any future tests that explicitly
+/// want a shared (singleton) service instance; not used by default.
 ///
 /// HARD RULE: Do not read src/**. This is a black-box HTTP parity test.
 use reqwest::blocking::Client;
 use serde_json::{json, Value};
+use std::net::{SocketAddr, TcpListener};
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::thread;
@@ -19,46 +25,66 @@ use std::time::Duration;
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const RUST_PORT: u16 = 10120;
 const PYTHON_PORT: u16 = 10101;
 const SECRET: &str = "change-me-in-production";
-
-fn rust_url(path: &str) -> String {
-    format!("http://127.0.0.1:{RUST_PORT}{path}")
-}
 
 fn py_url(path: &str) -> String {
     format!("http://127.0.0.1:{PYTHON_PORT}{path}")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Per-test ephemeral port allocation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pick a free TCP port by binding to :0 and reading what the OS assigned.
+/// The listener is dropped immediately (small TOCTOU window, acceptable in practice).
+fn pick_free_port() -> u16 {
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Service lifecycle
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct ServiceGuard(Child);
+struct ServiceGuard {
+    child: Child,
+    port: u16,
+}
 
-impl Drop for ServiceGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+impl ServiceGuard {
+    fn rust_url(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}{path}", self.port)
     }
 }
 
-fn start_rust_service() -> ServiceGuard {
+impl Drop for ServiceGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Boot `channel-service` on `port`, wait for health, return guard.
+fn start_rust_service_on(port: u16) -> ServiceGuard {
     let bin = env!("CARGO_BIN_EXE_channel-service");
     let child = Command::new(bin)
-        .env("SESSION_CHANNEL_PORT", RUST_PORT.to_string())
+        .env("SESSION_CHANNEL_PORT", port.to_string())
         .env("SESSION_CHANNEL_REDIS_URL", "redis://127.0.0.1:6379/0")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("failed to spawn channel-service binary");
-    ServiceGuard(child)
+    let guard = ServiceGuard { child, port };
+    wait_for_health(port, SECRET, 6000);
+    guard
 }
 
 fn wait_for_health(port: u16, secret: &str, timeout_ms: u64) {
     let client = Client::builder()
-        .timeout(Duration::from_millis(500))
+        .timeout(Duration::from_secs(3))
         .build()
         .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
@@ -79,21 +105,20 @@ fn wait_for_health(port: u16, secret: &str, timeout_ms: u64) {
     }
 }
 
-/// Global: boot the Rust service exactly once, killed at process exit via OnceLock.
-/// Tests run serially (cargo test default for integration tests in a single file).
-static RUST_SERVICE: OnceLock<()> = OnceLock::new();
-// We keep the guard alive for the entire test process lifetime.
-static mut _GUARD: Option<ServiceGuard> = None;
+/// Legacy singleton — kept for future tests that explicitly want a shared service.
+/// Not used by the default per-test isolation pattern below.
+#[allow(dead_code)]
+static SHARED_SERVICE: OnceLock<()> = OnceLock::new();
+#[allow(dead_code)]
+static mut _SHARED_GUARD: Option<ServiceGuard> = None;
 
-fn ensure_rust_service() {
-    RUST_SERVICE.get_or_init(|| {
-        let guard = start_rust_service();
-        // Safety: single-threaded initialisation under OnceLock
-        unsafe { _GUARD = Some(guard) };
-        wait_for_health(RUST_PORT, SECRET, 6000);
-        // Also verify Python is up (tests depend on it)
-        wait_for_health(PYTHON_PORT, SECRET, 2000);
-    });
+/// Convenience: boot per-test service and verify Python is reachable.
+fn new_test_service() -> ServiceGuard {
+    let port = pick_free_port();
+    let guard = start_rust_service_on(port);
+    // Also verify Python is up (tests depend on it)
+    wait_for_health(PYTHON_PORT, SECRET, 2000);
+    guard
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -167,8 +192,8 @@ fn redis_cleanup(topic: &str) {
         .status();
 }
 
-/// Send N messages to Rust, return topic name (caller must cleanup).
-fn seed_messages(topic: &str, count: usize) {
+/// Send N messages to Rust service, return topic name (caller must cleanup).
+fn seed_messages(guard: &ServiceGuard, topic: &str, count: usize) {
     for i in 0..count {
         let body = json!({
             "topic": topic,
@@ -176,7 +201,7 @@ fn seed_messages(topic: &str, count: usize) {
             "sender": "e2e-seed",
             "priority": "normal",
         });
-        let (status, val) = authed_post(&rust_url("/api/messages"), &body);
+        let (status, val) = authed_post(&guard.rust_url("/api/messages"), &body);
         assert_eq!(status, 200, "seed_messages POST failed: {val}");
     }
 }
@@ -187,9 +212,9 @@ fn seed_messages(topic: &str, count: usize) {
 
 #[test]
 fn test_health_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
-    let rust_h = authed_get(&rust_url("/health"));
+    let rust_h = authed_get(&svc.rust_url("/health"));
     let py_h = authed_get(&py_url("/health"));
 
     // Both must report ok + redis:true
@@ -218,10 +243,10 @@ fn test_health_parity() {
 
 #[test]
 fn test_post_messages_empty_topic_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     let body = json!({"topic": "", "text": "hello", "sender": "e2e"});
-    let (rust_status, rust_val) = authed_post(&rust_url("/api/messages"), &body);
+    let (rust_status, rust_val) = authed_post(&svc.rust_url("/api/messages"), &body);
     let (py_status, py_val) = authed_post(&py_url("/api/messages"), &body);
 
     assert_eq!(rust_status, 400, "Rust empty-topic status: {rust_val}");
@@ -234,11 +259,11 @@ fn test_post_messages_empty_topic_parity() {
 
 #[test]
 fn test_post_messages_long_topic_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     let long_topic = "a".repeat(101);
     let body = json!({"topic": long_topic, "text": "hi", "sender": "e2e"});
-    let (rust_status, rust_val) = authed_post(&rust_url("/api/messages"), &body);
+    let (rust_status, rust_val) = authed_post(&svc.rust_url("/api/messages"), &body);
     let (py_status, py_val) = authed_post(&py_url("/api/messages"), &body);
 
     assert_eq!(rust_status, 400, "Rust long-topic status: {rust_val}");
@@ -256,7 +281,7 @@ fn test_post_messages_long_topic_parity() {
 
 #[test]
 fn test_post_messages_bad_priority_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     let body = json!({
         "topic": "e2e-parity-valid-topic",
@@ -264,7 +289,7 @@ fn test_post_messages_bad_priority_parity() {
         "sender": "e2e",
         "priority": "urgent",
     });
-    let (rust_status, rust_val) = authed_post(&rust_url("/api/messages"), &body);
+    let (rust_status, rust_val) = authed_post(&svc.rust_url("/api/messages"), &body);
     let (py_status, py_val) = authed_post(&py_url("/api/messages"), &body);
 
     assert_eq!(rust_status, 400, "Rust bad-priority status: {rust_val}");
@@ -277,11 +302,11 @@ fn test_post_messages_bad_priority_parity() {
 
 #[test]
 fn test_no_auth_returns_401_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     // POST without auth
     let resp_rust = client()
-        .post(rust_url("/api/messages"))
+        .post(svc.rust_url("/api/messages"))
         .json(&json!({"topic": "t", "text": "x"}))
         .send()
         .unwrap();
@@ -312,10 +337,10 @@ fn test_no_auth_returns_401_parity() {
 
 #[test]
 fn test_wrong_key_returns_401_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     let resp_rust = client()
-        .get(rust_url("/api/topics"))
+        .get(svc.rust_url("/api/topics"))
         .header("x-local-key", "wrong-key")
         .send()
         .unwrap();
@@ -343,7 +368,7 @@ fn test_wrong_key_returns_401_parity() {
 
 #[test]
 fn test_post_message_and_read_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     let topic = "e2e-parity-post-read";
     redis_cleanup(topic);
@@ -356,7 +381,7 @@ fn test_post_message_and_read_parity() {
         "priority": "normal",
         "tag": "smoke",
     });
-    let (rust_status, rust_post) = authed_post(&rust_url("/api/messages"), &body);
+    let (rust_status, rust_post) = authed_post(&svc.rust_url("/api/messages"), &body);
     assert_eq!(rust_status, 200, "Rust POST failed: {rust_post}");
     assert_eq!(rust_post["ok"], true, "Rust POST ok field: {rust_post}");
     assert_eq!(rust_post["topic"], topic, "Rust POST topic field");
@@ -365,7 +390,7 @@ fn test_post_message_and_read_parity() {
     thread::sleep(Duration::from_millis(100));
 
     // Read from BOTH — same Redis backend, should see the same message
-    let rust_read = authed_get(&rust_url(&format!("/api/messages/{topic}")));
+    let rust_read = authed_get(&svc.rust_url(&format!("/api/messages/{topic}")));
     let py_read = authed_get(&py_url(&format!("/api/messages/{topic}")));
 
     assert_eq!(
@@ -396,13 +421,13 @@ fn test_post_message_and_read_parity() {
 
 #[test]
 fn test_read_order_newest_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     let topic = "e2e-parity-order-newest";
     redis_cleanup(topic);
-    seed_messages(topic, 5);
+    seed_messages(&svc, topic, 5);
 
-    let rust = authed_get(&rust_url(&format!(
+    let rust = authed_get(&svc.rust_url(&format!(
         "/api/messages/{topic}?order=newest&count=3"
     )));
     let py = authed_get(&py_url(&format!(
@@ -440,13 +465,13 @@ fn test_read_order_newest_parity() {
 
 #[test]
 fn test_read_order_oldest_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     let topic = "e2e-parity-order-oldest";
     redis_cleanup(topic);
-    seed_messages(topic, 5);
+    seed_messages(&svc, topic, 5);
 
-    let rust = authed_get(&rust_url(&format!(
+    let rust = authed_get(&svc.rust_url(&format!(
         "/api/messages/{topic}?order=oldest&count=2"
     )));
     let py = authed_get(&py_url(&format!(
@@ -483,13 +508,13 @@ fn test_read_order_oldest_parity() {
 
 #[test]
 fn test_read_bogus_order_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     // GET /api/messages/:topic?order=bogus — expect 400 on BOTH
     // Note: Python uses FastAPI Query(pattern=...) which returns 422 Unprocessable Entity
     // if the pattern does not match. We accept either 400 or 422 as "client error".
     let resp_rust = client()
-        .get(rust_url("/api/messages/any-topic?order=bogus"))
+        .get(svc.rust_url("/api/messages/any-topic?order=bogus"))
         .header("x-local-key", SECRET)
         .send()
         .unwrap();
@@ -515,16 +540,16 @@ fn test_read_bogus_order_parity() {
 
 #[test]
 fn test_topics_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     let topic = "e2e-parity-topics-check";
     redis_cleanup(topic);
 
     // Seed via Rust
-    seed_messages(topic, 2);
+    seed_messages(&svc, topic, 2);
     thread::sleep(Duration::from_millis(100));
 
-    let rust_topics = authed_get(&rust_url("/api/topics"));
+    let rust_topics = authed_get(&svc.rust_url("/api/topics"));
     let py_topics = authed_get(&py_url("/api/topics"));
 
     // Both should contain our test topic
@@ -574,11 +599,11 @@ fn test_topics_parity() {
 
 #[test]
 fn test_agents_active_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     // Both should return the same agent set from the same Redis `agents` stream.
     // We compare set of `key` fields (host:pane) to avoid ordering differences.
-    let rust_agents = authed_get(&rust_url("/api/agents/active?within=300"));
+    let rust_agents = authed_get(&svc.rust_url("/api/agents/active?within=300"));
     let py_agents = authed_get(&py_url("/api/agents/active?within=300"));
 
     fn agent_keys(val: &Value) -> std::collections::BTreeSet<String> {
@@ -615,11 +640,11 @@ fn test_agents_active_parity() {
 
 #[test]
 fn test_auth_wrong_key_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     for path in ["/api/topics", "/api/agents/active"] {
         let resp_rust = client()
-            .get(rust_url(path))
+            .get(svc.rust_url(path))
             .header("x-local-key", "totally-wrong")
             .send()
             .unwrap();
@@ -644,14 +669,14 @@ fn test_auth_wrong_key_parity() {
 
 #[test]
 fn test_auth_no_key_parity() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     for path in [
         "/api/topics",
         "/api/messages/any-topic",
         "/api/agents/active",
     ] {
-        let resp_rust = client().get(rust_url(path)).send().unwrap();
+        let resp_rust = client().get(svc.rust_url(path)).send().unwrap();
         let resp_py = client().get(py_url(path)).send().unwrap();
 
         let rs = resp_rust.status().as_u16();
@@ -685,13 +710,14 @@ fn test_auth_no_key_parity() {
 
 #[test]
 fn test_sse_smoke_rust() {
-    ensure_rust_service();
+    let svc = new_test_service();
 
     let topic = "e2e-parity-sse-smoke";
     redis_cleanup(topic);
 
     // Kick off a background thread that posts a message after a short delay
     let topic_clone = topic.to_string();
+    let rust_port = svc.port;
     thread::spawn(move || {
         thread::sleep(Duration::from_millis(800));
         let body = json!({
@@ -701,7 +727,7 @@ fn test_sse_smoke_rust() {
             "priority": "normal",
         });
         let _ = Client::new()
-            .post(format!("http://127.0.0.1:{RUST_PORT}/api/messages"))
+            .post(format!("http://127.0.0.1:{rust_port}/api/messages"))
             .header("x-local-key", SECRET)
             .json(&body)
             .send();
@@ -711,7 +737,7 @@ fn test_sse_smoke_rust() {
     // reqwest blocking doesn't support streaming well, so we read with a 5s timeout and
     // check for at least one "data: " line.
     let resp = client()
-        .get(rust_url(&format!("/api/stream?topic={topic}")))
+        .get(svc.rust_url(&format!("/api/stream?topic={topic}")))
         .header("x-local-key", SECRET)
         .header("Accept", "text/event-stream")
         .timeout(Duration::from_secs(5))
