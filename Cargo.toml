@@ -1,13 +1,15 @@
 [package]
-# Package name dropped the `-rs` suffix on 2026-05-12 P8 cutover when the
-# Rust implementation became the canonical session-channel. The GitHub
-# repo URL keeps `-rs` to avoid breaking existing user clone URLs.
+# Package name dropped the `-rs` suffix and version bumped to 0.2.0 on
+# 2026-05-12 P8 cutover when the Rust implementation became the canonical
+# session-channel (Python archived at operonlab/session-channel-py).
+# OSS repo URL also moved to .../session-channel (was .../session-channel-rs);
+# GitHub redirects old URLs automatically.
 name = "session-channel"
-version = "0.1.0-alpha.1"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "session-channel — cross-pane, cross-CLI pub-sub bus over tmux + Redis Streams"
-repository = "https://github.com/operonlab/session-channel-rs"
+repository = "https://github.com/operonlab/session-channel"
 authors = ["Jones Hong"]
 
 # ─────────────────────────────────────────────────────────────────────────────

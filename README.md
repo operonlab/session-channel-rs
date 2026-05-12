@@ -1,10 +1,10 @@
 # session-channel
 
-A cross-pane, cross-CLI pub-sub bus over **tmux + Redis Streams**. **Alpha — `v0.1.0-alpha.3` released; `v0.1.0-alpha.4` (post-cutover) in progress.**
+A cross-pane, cross-CLI pub-sub bus over **tmux + Redis Streams**. **v0.2.0 — Rust takeover release.**
 
-> The Rust implementation took over as the canonical `session-channel` on 2026-05-12 (P8 cutover); the original Python reference is archived at `stations/_archive/session-channel-py/` in the upstream monorepo. The GitHub repo URL keeps the historical `-rs` suffix (`operonlab/session-channel-rs`) so existing user clones don't break.
+> The Rust implementation took over as the canonical `session-channel` on 2026-05-12 (P8 cutover). The original Python reference is archived at `operonlab/session-channel-py` (kept read-accessible; new development lands here). Old user clones of `operonlab/session-channel-rs` continue to resolve via GitHub's automatic repo-rename redirect.
 
-## Status (2026-05-12, post-P8 cutover)
+## Status (v0.2.0, post-P8 cutover)
 
 ### CLI (`channel`)
 1:1 port of all 8 Python subcommands. Byte-level parity verified against the Python CLI.
@@ -95,7 +95,7 @@ alive indefinitely. Claude Code does not need this (it does not self-exit), so
 ## Build & run
 
 ```bash
-git clone https://github.com/operonlab/session-channel-rs session-channel
+git clone https://github.com/operonlab/session-channel
 cd session-channel
 cargo build --release --bins
 
