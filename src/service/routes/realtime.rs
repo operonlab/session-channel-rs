@@ -75,7 +75,7 @@ fn require_auth(
 
     Err((
         StatusCode::UNAUTHORIZED,
-        Json(json!({"error": "unauthorized"})),
+        Json(json!({"detail": "Not authenticated"})),
     ))
 }
 
