@@ -1,4 +1,4 @@
-#!/Users/joneshong/.local/bin/python3
+#!/usr/bin/env python3
 """Codex notify hook → publish heartbeat to session-channel.
 
 Codex CLI 0.130.0 has a single hook point: `config.toml.notify` fires on
@@ -25,7 +25,13 @@ import subprocess
 import sys
 import time
 
-CHANNEL_CLI = "/Users/joneshong/workshop/stations/session-channel/cli/channel.py"
+_HOME = os.environ.get("SESSION_CHANNEL_HOME") or os.path.join(
+    os.path.expanduser("~"), ".session-channel"
+)
+if not os.path.isfile(os.path.join(_HOME, "cli", "channel.py")):
+    # Fallback: running from source tree / monorepo
+    _HOME = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CHANNEL_CLI = os.path.join(_HOME, "cli", "channel.py")
 
 
 def main() -> int:
