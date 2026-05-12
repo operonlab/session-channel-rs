@@ -94,5 +94,37 @@ fi
 
 # Run as child (NOT exec) so the EXIT trap fires on quit and a `leave`
 # event is always published — same fix as codex-with-channel.
-gemini --yolo --session-id "$SESSION_ID" "$@"
-exit $?
+#
+# Respawn loop (opt-in via CHANNEL_LOOP=1): Gemini sometimes self-exits
+# after handling a task ("Agent powering down. Goodbye!"). When this
+# happens, the pane drops to zsh and SSE-pushed prompts go to a shell
+# that interprets the trust marker as a bash command. The loop relaunches
+# Gemini so the pane stays a live worker. Bail after 3 quick exits to
+# avoid hot-spin if `gemini` is broken.
+RESPAWN_QUICK_EXIT_THRESHOLD=5  # exits faster than this (seconds) count as quick
+RESPAWN_MAX_QUICK=3
+quick_count=0
+while true; do
+  start_ts=$(date +%s)
+  gemini --yolo --session-id "$SESSION_ID" "$@"
+  rc=$?
+  end_ts=$(date +%s)
+
+  if [[ -z "${CHANNEL_LOOP:-}" ]]; then
+    exit $rc
+  fi
+
+  if (( end_ts - start_ts < RESPAWN_QUICK_EXIT_THRESHOLD )); then
+    quick_count=$((quick_count + 1))
+    if (( quick_count >= RESPAWN_MAX_QUICK )); then
+      echo "gemini-with-channel: $quick_count quick exits, giving up loop" >&2
+      exit $rc
+    fi
+  else
+    quick_count=0
+  fi
+  publish heartbeat "gemini/$PANE respawn (rc=$rc, ran ${end_ts}s-${start_ts}s)"
+  sleep 1
+  # Renew session id so the new instance has a fresh tag in metadata.
+  SESSION_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+done

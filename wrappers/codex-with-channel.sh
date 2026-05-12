@@ -101,8 +101,34 @@ fi
 # discards the EXIT trap and leaves a stale heartbeat in `channel agents`
 # after Codex quits. Running codex as a child preserves the trap so the
 # `leave` event always fires on exit (verified Phase E 2026-05-11).
-codex \
-  --dangerously-bypass-approvals-and-sandbox \
-  -c "notify=[\"$PY\", \"$HOOK\"]" \
-  "$@"
-exit $?
+#
+# Respawn loop (opt-in via CHANNEL_LOOP=1) — see gemini-with-channel.sh
+# for rationale + quick-exit guard.
+RESPAWN_QUICK_EXIT_THRESHOLD=5
+RESPAWN_MAX_QUICK=3
+quick_count=0
+while true; do
+  start_ts=$(date +%s)
+  codex \
+    --dangerously-bypass-approvals-and-sandbox \
+    -c "notify=[\"$PY\", \"$HOOK\"]" \
+    "$@"
+  rc=$?
+  end_ts=$(date +%s)
+
+  if [[ -z "${CHANNEL_LOOP:-}" ]]; then
+    exit $rc
+  fi
+
+  if (( end_ts - start_ts < RESPAWN_QUICK_EXIT_THRESHOLD )); then
+    quick_count=$((quick_count + 1))
+    if (( quick_count >= RESPAWN_MAX_QUICK )); then
+      echo "codex-with-channel: $quick_count quick exits, giving up loop" >&2
+      exit $rc
+    fi
+  else
+    quick_count=0
+  fi
+  publish heartbeat "codex/$PANE respawn (rc=$rc)"
+  sleep 1
+done
