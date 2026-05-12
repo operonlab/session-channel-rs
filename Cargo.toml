@@ -3,20 +3,31 @@ name = "session-channel-rs"
 version = "0.1.0-alpha.1"
 edition = "2021"
 license = "MIT"
-description = "Rust port of session-channel — CLI skeleton (send/read so far)"
+description = "Rust port of session-channel — CLI + service binary"
 repository = "https://github.com/operonlab/session-channel-rs"
 authors = ["Jones Hong"]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Scope (2026-05-12 skeleton):
-#   - `channel send` and `channel read` against the existing Python service
-#   - Single binary `channel`
-#   - Service binary (axum + redis-rs) + remaining 6 cmds → next session
+# Binaries:
+#   - `channel`         CLI (talks to a session-channel HTTP service)
+#   - `channel-service` HTTP service (axum + redis-rs, replaces Python FastAPI)
+#
+# Library:
+#   - shared service modules (store / auth / routes), exposed so the service
+#     binary and integration tests can both link against them.
 # ─────────────────────────────────────────────────────────────────────────────
+
+[lib]
+name = "session_channel_rs"
+path = "src/lib.rs"
 
 [[bin]]
 name = "channel"
 path = "src/main.rs"
+
+[[bin]]
+name = "channel-service"
+path = "src/bin/channel-service.rs"
 
 [dependencies]
 anyhow = "1"
@@ -24,6 +35,31 @@ clap = { version = "4", features = ["derive", "wrap_help"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Service-binary stack
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["json", "macros", "tokio"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "streams"] }
+futures = "0.3"
+async-stream = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Signed cookies (1:1 with Python itsdangerous URLSafeTimedSerializer — sha1 HMAC)
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+
+# Config loader (YAML)
+serde_yaml = "0.9"
+
+[dev-dependencies]
+# Test agents fill these in — keep available for unit/integration suites
+tokio = { version = "1", features = ["full", "test-util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [profile.release]
 opt-level = 3
