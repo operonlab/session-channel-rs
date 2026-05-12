@@ -1,4 +1,4 @@
-#!/Users/joneshong/.local/bin/python3
+#!/usr/bin/env python3
 """Session Channel CLI — send/read messages across Claude Code sessions."""
 
 from __future__ import annotations
