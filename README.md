@@ -93,13 +93,50 @@ alive indefinitely. Claude Code does not need this (it does not self-exit), so
 
 ## Prerequisites
 
-- **Rust 1.75+** — only if you want to build from source. Install via [rustup](https://rustup.rs/).
-- **Redis 6+** — local or remote. Quickest: `docker run -d -p 6379:6379 redis:7-alpine` or `brew services start redis`.
-- **(optional) tmux** — required only if you want pane-aware `sender` fields.
+Pick one path; you don't need all three:
 
-Pre-built binaries, a Docker stack, a Homebrew tap, and a one-line `install.sh` are tracked for v0.3 (see [`CHANGELOG.md`](./CHANGELOG.md) and the project roadmap).
+- **Docker + Docker Compose** — _recommended_; bundles Redis. Nothing else to install on the host.
+- **Homebrew (macOS / Linux)** + a Redis you already run somewhere.
+- **`install.sh`** for any *nix without `brew` + a Redis you already run somewhere.
 
-## Build & run
+Optional:
+
+- **tmux** — only required if you want pane-aware `sender` fields.
+- **Rust 1.82+** — only if you want to build from source.
+
+## Install
+
+### Docker (recommended — bundles Redis)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/operonlab/session-channel/main/docker-compose.yml -o docker-compose.yml
+echo "SESSION_CHANNEL_KEY=$(openssl rand -hex 32)" > .env
+docker compose up -d
+```
+
+Service comes up on `http://127.0.0.1:10101`. Then install the CLI on the host (see below) — `channel send` talks to the service over HTTP, no `docker exec` needed.
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew install operonlab/tap/session-channel
+brew services start redis           # if you don't already have one
+brew services start session-channel # background launch via launchd / systemd
+```
+
+### One-line installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/operonlab/session-channel/main/install.sh | bash
+```
+
+Installs `channel` + `channel-service` to `~/.local/bin` (override with `INSTALL_DIR=...`). To remove:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/operonlab/session-channel/main/install.sh | bash -s -- --uninstall
+```
+
+### From source
 
 ```bash
 git clone https://github.com/operonlab/session-channel
@@ -118,7 +155,9 @@ cargo build --release --bins
     --workers claude:%5,codex:%6,gemini:%7 --wait 120
 ```
 
-### Environment variables
+## Environment variables
+
+Applies to every install path (Docker / Homebrew / `install.sh` / source). For Docker, set these in your `.env` file; for the host CLI, export them in your shell rc.
 
 | Var | Default | Effect |
 |---|---|---|

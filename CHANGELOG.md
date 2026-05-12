@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Cargo.toml` metadata: `homepage`, `documentation`, `readme`, `keywords`, `categories`, `rust-version` (1.82).
 - Release tarballs now include `LICENSE` and `README.md`, and ship with a `.sha256` companion file (used by Homebrew formula bumps).
 - Release notes auto-include install snippets (Docker / Homebrew / `install.sh`).
+- `Dockerfile` + `docker-compose.yml` + `.env.example` for a one-command stack (`docker compose up -d` brings up Redis + service).
+- `.github/workflows/docker.yml` builds multi-arch (`linux/amd64` + `linux/arm64`) images and pushes to `ghcr.io/operonlab/session-channel` on `v*.*.*` tags and `main`.
+- `install.sh` — POSIX one-liner that detects OS/arch, downloads the right tarball, verifies the SHA256, and installs to `~/.local/bin`. Supports `--uninstall`.
+- `packaging/homebrew/session-channel.rb` — Homebrew formula source of truth (copied into `operonlab/homebrew-tap` per release). Includes `service do …` for `brew services start session-channel`.
+- README Install section restructured: Docker / Homebrew / `install.sh` / source as four distinct paths with the recommended path first.
 
 ### Changed
 - `test_agents_active_parity` marked `#[ignore]` — it reads the shared `ws:channel:agents` stream and is host-pollution-prone on dev boxes with live wrappers. CI runs it explicitly via `--ignored`.
