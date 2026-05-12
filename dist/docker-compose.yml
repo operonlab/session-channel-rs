@@ -1,0 +1,37 @@
+# Quick-try compose: brings up Redis + session-channel on localhost only.
+# Redis exposes 6379 to the channel container's network; it is NOT published
+# to the host. session-channel publishes 10101 on 127.0.0.1.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  session-channel:
+    build:
+      context: ..
+      dockerfile: dist/Dockerfile
+    image: session-channel:latest
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      SESSION_CHANNEL_PORT: 10101
+      # Override the default 127.0.0.1 redis URL — inside the compose
+      # network the service host is `redis`.
+      SESSION_CHANNEL_REDIS_URL: redis://redis:6379/0
+    ports:
+      # Bind to loopback only by default; change to "10101:10101" to expose
+      - "127.0.0.1:10101:10101"
+
+volumes:
+  redis-data:
