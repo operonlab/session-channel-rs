@@ -1,11 +1,30 @@
-//! `channel health` — stub. To be implemented by W1.
+//! `channel health` — GET /health and print redis + topic count.
+//!
+//! Output mirrors the Python CLI exactly:
+//!   ✅ redis=true  topics=3
+//!   ❌ redis=false  topics=0
 
 use anyhow::Result;
 use clap::Args as ClapArgs;
+use serde::Deserialize;
+
+use crate::client::ApiClient;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {}
 
+#[derive(Deserialize)]
+struct HealthResp {
+    #[serde(default)]
+    redis: bool,
+    #[serde(default)]
+    active_topics: u64,
+}
+
 pub fn run(_args: Args) -> Result<()> {
-    anyhow::bail!("channel health: not yet implemented (skeleton)")
+    let client = ApiClient::new()?;
+    let d: HealthResp = client.get_json("/health", &[])?;
+    let status = if d.redis { "✅" } else { "❌" };
+    println!("{} redis={}  topics={}", status, d.redis, d.active_topics);
+    Ok(())
 }
