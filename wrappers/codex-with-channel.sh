@@ -71,8 +71,18 @@ publish announce "codex/$PANE started"
 ) &
 HB_PID=$!
 
+# Background SSE listener — push-delivery for tasks targeted at this pane.
+# Complements the orchestrator's `--notify` tmux send-keys path; the two
+# coordinate via /tmp/sc-nudged-${pane}.txt to avoid double-push.
+SSE_PID=""
+source "${SESSION_CHANNEL_HOME}/wrappers/sse_subscribe.sh" 2>/dev/null || true
+if command -v start_sse_listener >/dev/null 2>&1; then
+  start_sse_listener
+fi
+
 cleanup() {
   kill "$HB_PID" 2>/dev/null || true
+  [ -n "$SSE_PID" ] && kill "$SSE_PID" 2>/dev/null || true
   publish leave "codex/$PANE left"
 }
 trap cleanup EXIT INT TERM

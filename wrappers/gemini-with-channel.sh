@@ -72,8 +72,16 @@ publish announce "gemini/$PANE started"
 ) &
 HB_PID=$!
 
+# Background SSE listener — push-delivery for tasks targeted at this pane.
+SSE_PID=""
+source "${SESSION_CHANNEL_HOME}/wrappers/sse_subscribe.sh" 2>/dev/null || true
+if command -v start_sse_listener >/dev/null 2>&1; then
+  start_sse_listener
+fi
+
 cleanup() {
   kill "$HB_PID" 2>/dev/null || true
+  [ -n "$SSE_PID" ] && kill "$SSE_PID" 2>/dev/null || true
   publish leave "gemini/$PANE left"
 }
 trap cleanup EXIT INT TERM
