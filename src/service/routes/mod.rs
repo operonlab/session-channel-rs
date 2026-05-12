@@ -9,5 +9,7 @@ use axum::Router;
 use crate::service::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().merge(core::router()).merge(realtime::router())
+    Router::new()
+        .merge(core::router())
+        .merge(realtime::router())
 }

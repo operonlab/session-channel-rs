@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use redis::aio::ConnectionManager;
-use redis::streams::{StreamMaxlen, StreamReadOptions, StreamReadReply, StreamRangeReply};
+use redis::streams::{StreamMaxlen, StreamRangeReply, StreamReadOptions, StreamReadReply};
 use redis::AsyncCommands;
 use serde_json::{Map, Value};
 use tokio::sync::broadcast;
@@ -32,7 +32,9 @@ fn now_ms() -> u64 {
 }
 
 /// Parse a Redis bulk-string map (from StreamId.map) into Vec<(String,String)>.
-fn redis_map_to_fields(map: &std::collections::HashMap<String, redis::Value>) -> Vec<(String, String)> {
+fn redis_map_to_fields(
+    map: &std::collections::HashMap<String, redis::Value>,
+) -> Vec<(String, String)> {
     map.iter()
         .filter_map(|(k, v)| {
             let s = match v {
@@ -175,15 +177,12 @@ pub async fn list_topics(
 }
 
 /// Health ping — returns (redis_ok, active_topic_count).
-pub async fn health_check(
-    redis: &mut ConnectionManager,
-    topics_key: &str,
-) -> Result<(bool, u64)> {
-    let ping_ok = redis.send_packed_command(
-        &redis::cmd("PING")
-    ).await
-    .map(|_| true)
-    .unwrap_or(false);
+pub async fn health_check(redis: &mut ConnectionManager, topics_key: &str) -> Result<(bool, u64)> {
+    let ping_ok = redis
+        .send_packed_command(&redis::cmd("PING"))
+        .await
+        .map(|_| true)
+        .unwrap_or(false);
 
     let topic_count: u64 = redis.scard(topics_key).await.unwrap_or(0);
 
@@ -232,7 +231,8 @@ pub async fn list_active_agents(
         let key = format!("{}:{}", host, pane);
 
         // Parse timestamp from stream id
-        let ts_ms: u64 = sid.id
+        let ts_ms: u64 = sid
+            .id
             .split('-')
             .next()
             .and_then(|s| s.parse().ok())
@@ -274,21 +274,47 @@ pub async fn list_active_agents(
     // Sort: role=="main" first, then -ctx_pct, then -ts_ms
     let mut agents: Vec<Value> = seen.into_values().collect();
     agents.sort_by(|a, b| {
-        let meta_a = a.get("_meta").and_then(|m| m.as_object()).cloned().unwrap_or_default();
-        let meta_b = b.get("_meta").and_then(|m| m.as_object()).cloned().unwrap_or_default();
+        let meta_a = a
+            .get("_meta")
+            .and_then(|m| m.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let meta_b = b
+            .get("_meta")
+            .and_then(|m| m.as_object())
+            .cloned()
+            .unwrap_or_default();
 
-        let role_rank_a: i32 = if meta_a.get("role").and_then(|v| v.as_str()) == Some("main") { 0 } else { 1 };
-        let role_rank_b: i32 = if meta_b.get("role").and_then(|v| v.as_str()) == Some("main") { 0 } else { 1 };
+        let role_rank_a: i32 = if meta_a.get("role").and_then(|v| v.as_str()) == Some("main") {
+            0
+        } else {
+            1
+        };
+        let role_rank_b: i32 = if meta_b.get("role").and_then(|v| v.as_str()) == Some("main") {
+            0
+        } else {
+            1
+        };
 
-        let ctx_a: f64 = meta_a.get("ctx_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let ctx_b: f64 = meta_b.get("ctx_pct").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let ctx_a: f64 = meta_a
+            .get("ctx_pct")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let ctx_b: f64 = meta_b
+            .get("ctx_pct")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
 
         let ts_a: u64 = a.get("ts_ms").and_then(|v| v.as_u64()).unwrap_or(0);
         let ts_b: u64 = b.get("ts_ms").and_then(|v| v.as_u64()).unwrap_or(0);
 
         role_rank_a
             .cmp(&role_rank_b)
-            .then(ctx_b.partial_cmp(&ctx_a).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                ctx_b
+                    .partial_cmp(&ctx_a)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
             .then(ts_b.cmp(&ts_a))
     });
 
@@ -361,10 +387,8 @@ pub async fn fanout_loop(
 
         // XREAD BLOCK 2000ms COUNT 50
         let opts = StreamReadOptions::default().block(2000).count(50);
-        let reply: Option<StreamReadReply> = redis
-            .xread_options(&stream_keys, &ids, &opts)
-            .await
-            .ok();
+        let reply: Option<StreamReadReply> =
+            redis.xread_options(&stream_keys, &ids, &opts).await.ok();
 
         let reply = match reply {
             Some(r) => r,

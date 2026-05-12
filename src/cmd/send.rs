@@ -62,8 +62,7 @@ pub fn run(args: Args) -> Result<()> {
     let meta = if args.meta.is_empty() {
         None
     } else {
-        let v: Value = serde_json::from_str(&args.meta)
-            .context("--meta must be valid JSON")?;
+        let v: Value = serde_json::from_str(&args.meta).context("--meta must be valid JSON")?;
         match v {
             Value::Object(m) => Some(m),
             _ => {

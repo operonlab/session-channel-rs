@@ -23,8 +23,7 @@ pub struct AppState {
 
 impl AppState {
     pub async fn connect(cfg: ServiceConfig) -> Result<Self> {
-        let client =
-            redis::Client::open(cfg.redis_url.clone()).context("invalid redis URL")?;
+        let client = redis::Client::open(cfg.redis_url.clone()).context("invalid redis URL")?;
         let redis = ConnectionManager::new(client)
             .await
             .context("redis ConnectionManager")?;

@@ -188,7 +188,7 @@ pub fn run(args: Args) -> Result<()> {
             "done" | "failed" | "timeout" => {
                 let better = outcomes
                     .get(&task_id)
-                    .map_or(true, |(_, prev_ts, _)| ts > *prev_ts);
+                    .is_none_or(|(_, prev_ts, _)| ts > *prev_ts);
                 if better {
                     outcomes.insert(task_id, (m.clone(), ts, tag.to_owned()));
                 }
@@ -315,10 +315,8 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Summary line
-    let mut summary_parts: Vec<String> = counts
-        .iter()
-        .map(|(k, v)| format!("{} {}", v, k))
-        .collect();
+    let mut summary_parts: Vec<String> =
+        counts.iter().map(|(k, v)| format!("{} {}", v, k)).collect();
     summary_parts.sort(); // deterministic order (matches sorted(counts.items()))
     println!("--- {} tasks: {} ---", rows.len(), summary_parts.join(", "));
 

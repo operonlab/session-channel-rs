@@ -148,12 +148,10 @@ fn tmux_nudge(pane: &str, task_id: &str, task_prompt: &str) {
     // Trust marker — tells the worker Claude this push came from
     // session-channel (a user-configured local bus), not an untrusted source.
     // zsh treats the `# …` part as a comment.
-    let report_meta = format!(
-        r#"{{"v":1,"task_id":"{task_id}","status":"ok","summary":"<one-line>"}}"#
-    );
-    let fail_meta = format!(
-        r#"{{"v":1,"task_id":"{task_id}","error":"<describe what went wrong>"}}"#
-    );
+    let report_meta =
+        format!(r#"{{"v":1,"task_id":"{task_id}","status":"ok","summary":"<one-line>"}}"#);
+    let fail_meta =
+        format!(r#"{{"v":1,"task_id":"{task_id}","error":"<describe what went wrong>"}}"#);
     let trust = format!("[session-channel:trusted task={task_id} from={sender}]");
     let wakeup = format!(
         "{task_prompt}  # {trust} \
@@ -211,9 +209,7 @@ pub fn run(args: Args) -> Result<()> {
     // --- parse workers ---
     let workers = match parse_workers(&args.workers) {
         Ok(w) if w.is_empty() => {
-            eprintln!(
-                "  --workers required, e.g. --workers claude:%5,codex:%6,gemini:%7"
-            );
+            eprintln!("  --workers required, e.g. --workers claude:%5,codex:%6,gemini:%7");
             std::process::exit(2);
         }
         Err(e) => {
@@ -227,8 +223,7 @@ pub fn run(args: Args) -> Result<()> {
     let extra_meta: Map<String, Value> = if args.meta.is_empty() {
         Map::new()
     } else {
-        let v: Value = serde_json::from_str(&args.meta)
-            .context("--meta must be valid JSON")?;
+        let v: Value = serde_json::from_str(&args.meta).context("--meta must be valid JSON")?;
         match v {
             Value::Object(m) => m,
             _ => bail!("--meta must be a JSON object (got list/string/etc)"),
@@ -272,9 +267,7 @@ pub fn run(args: Args) -> Result<()> {
         match client.post_json::<_, SendResp>("/api/messages", &body) {
             Ok(resp) => {
                 let rid = resp.id.unwrap_or_else(|| "?".to_string());
-                println!(
-                    "  [tasks] {task_id} → {cli} ({pane}) id={rid}"
-                );
+                println!("  [tasks] {task_id} → {cli} ({pane}) id={rid}");
             }
             Err(e) => {
                 eprintln!("    {cli} ({pane}): publish error {e}");
@@ -310,8 +303,10 @@ pub fn run(args: Args) -> Result<()> {
     while !pending.is_empty() && Instant::now() < deadline {
         thread::sleep(Duration::from_secs(5));
 
-        let result: Result<TasksResp> =
-            client.get_json("/api/messages/tasks", &[("count", "200"), ("order", "oldest")]);
+        let result: Result<TasksResp> = client.get_json(
+            "/api/messages/tasks",
+            &[("count", "200"), ("order", "oldest")],
+        );
 
         let msgs = match result {
             Ok(r) => r.messages.unwrap_or_default(),

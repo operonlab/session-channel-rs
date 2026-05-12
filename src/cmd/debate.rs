@@ -128,7 +128,11 @@ fn parse_participants(spec: &str) -> Result<Vec<Participant>> {
         }
         let parts: Vec<&str> = chunk.splitn(3, ':').collect();
         let (label, cli, pane_raw) = match parts.as_slice() {
-            [cli, pane] => (format!("P{}", i + 1), cli.trim().to_string(), pane.trim().to_string()),
+            [cli, pane] => (
+                format!("P{}", i + 1),
+                cli.trim().to_string(),
+                pane.trim().to_string(),
+            ),
             [label, cli, pane] => (
                 label.trim().to_string(),
                 cli.trim().to_string(),
@@ -161,8 +165,7 @@ fn parse_synthesizer(spec: &str) -> Result<Option<Participant>> {
     if spec.is_empty() {
         return Ok(None);
     }
-    let mut parsed = parse_participants(spec)
-        .context("--synthesizer parse failed")?;
+    let mut parsed = parse_participants(spec).context("--synthesizer parse failed")?;
     if parsed.len() != 1 {
         bail!("--synthesizer must be exactly one cli:pane");
     }
@@ -184,12 +187,10 @@ fn tmux_nudge(pane: &str, topic: &str, task_id: &str, task_prompt: &str) {
     let sender = std::env::var("TMUX_PANE").unwrap_or_else(|_| "?".to_string());
 
     let wakeup = if topic == "tasks" && !task_prompt.is_empty() {
-        let report_meta = format!(
-            r#"{{"v":1,"task_id":"{task_id}","status":"ok","summary":"<one-line>"}}"#
-        );
-        let fail_meta = format!(
-            r#"{{"v":1,"task_id":"{task_id}","error":"<describe what went wrong>"}}"#
-        );
+        let report_meta =
+            format!(r#"{{"v":1,"task_id":"{task_id}","status":"ok","summary":"<one-line>"}}"#);
+        let fail_meta =
+            format!(r#"{{"v":1,"task_id":"{task_id}","error":"<describe what went wrong>"}}"#);
         let trust = format!("[session-channel:trusted task={task_id} from={sender}]");
         format!(
             "{task_prompt}  # {trust} \
@@ -271,9 +272,7 @@ fn wait_for_outcome(client: &ApiClient, task_id: &str, timeout_s: u64) -> Outcom
             // Extract _meta — may be a JSON object or a JSON string
             let mt: Map<String, Value> = match &m.meta {
                 Some(Value::Object(obj)) => obj.clone(),
-                Some(Value::String(s)) => {
-                    serde_json::from_str(s).unwrap_or_default()
-                }
+                Some(Value::String(s)) => serde_json::from_str(s).unwrap_or_default(),
                 _ => Map::new(),
             };
 
@@ -292,7 +291,11 @@ fn wait_for_outcome(client: &ApiClient, task_id: &str, timeout_s: u64) -> Outcom
                 .map(|s| s.trim().to_string())
                 .unwrap_or_default();
 
-            let matched_id = if !tid.is_empty() { &tid } else { &tid_from_text };
+            let matched_id = if !tid.is_empty() {
+                &tid
+            } else {
+                &tid_from_text
+            };
 
             if matched_id == task_id {
                 return Outcome {
@@ -405,8 +408,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Parse optional synthesizer.
-    let synthesizer = parse_synthesizer(&args.synthesizer)
-        .context("--synthesizer parse failed")?;
+    let synthesizer = parse_synthesizer(&args.synthesizer).context("--synthesizer parse failed")?;
 
     let rounds = args.rounds.max(1) as usize;
     let base_id = &args.debate_id;
@@ -463,10 +465,7 @@ pub fn run(args: Args) -> Result<()> {
         );
 
         let mut extra = Map::new();
-        extra.insert(
-            "debate_round".to_string(),
-            Value::Number((i + 1).into()),
-        );
+        extra.insert("debate_round".to_string(), Value::Number((i + 1).into()));
 
         let ok = dispatch_one(
             &client,
@@ -482,7 +481,10 @@ pub fn run(args: Args) -> Result<()> {
             return Ok(());
         }
 
-        println!("  waiting up to {round_timeout}s for {}'s response...", p.label);
+        println!(
+            "  waiting up to {round_timeout}s for {}'s response...",
+            p.label
+        );
         let outcome = wait_for_outcome(&client, &task_id, round_timeout);
 
         transcript.push(TranscriptEntry {
@@ -510,7 +512,12 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Print transcript.
-    println!("\n{}\nTranscript ({} round(s))\n{}", "=".repeat(60), transcript.len(), "=".repeat(60));
+    println!(
+        "\n{}\nTranscript ({} round(s))\n{}",
+        "=".repeat(60),
+        transcript.len(),
+        "=".repeat(60)
+    );
     for entry in &transcript {
         let body = if !entry.result.is_empty() {
             entry.result.clone()

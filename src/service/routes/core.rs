@@ -67,9 +67,7 @@ fn is_authenticated(
     key_query: Option<&str>,
     cfg: &crate::service::ServiceConfig,
 ) -> bool {
-    let local_key_header = headers
-        .get("x-local-key")
-        .and_then(|v| v.to_str().ok());
+    let local_key_header = headers.get("x-local-key").and_then(|v| v.to_str().ok());
 
     // Manual cookie parse — no `cookie` crate available.
     let cookie_value: Option<String> = headers
@@ -283,10 +281,7 @@ async fn send_message(
         );
     }
     if priority != "normal" && priority != "high" {
-        api_err!(
-            StatusCode::BAD_REQUEST,
-            "priority must be normal or high"
-        );
+        api_err!(StatusCode::BAD_REQUEST, "priority must be normal or high");
     }
 
     // Serialize _meta to JSON string for the hash field (Python parity).
@@ -306,11 +301,8 @@ async fn send_message(
     check_rate(sender)?;
 
     // Build the fields list (sender, text, priority, optional tag, optional _meta).
-    let mut fields: Vec<(&str, &str)> = vec![
-        ("sender", sender),
-        ("text", text),
-        ("priority", priority),
-    ];
+    let mut fields: Vec<(&str, &str)> =
+        vec![("sender", sender), ("text", text), ("priority", priority)];
     if !tag.is_empty() {
         fields.push(("tag", tag));
     }

@@ -39,19 +39,44 @@ pub struct ServiceConfig {
     pub allowed_origins: Vec<String>,
 }
 
-fn default_port() -> u16 { 10101 }
-fn default_host() -> String { "127.0.0.1".into() }
-fn default_redis_url() -> String { "redis://127.0.0.1:6379/0".into() }
-fn default_secret_key() -> String { "change-me-in-production".into() }
-fn default_session_cookie_name() -> String { "workshop_session".into() }
-fn default_session_max_age() -> u64 { 604_800 }
-fn default_stream_prefix() -> String { "ws:channel:".into() }
-fn default_topics_key() -> String { "ws:channel:__topics".into() }
-fn default_ttl_seconds() -> u64 { 1_800 }
-fn default_trim_interval() -> u64 { 60 }
-fn default_max_stream_len() -> u64 { 500 }
+fn default_port() -> u16 {
+    10101
+}
+fn default_host() -> String {
+    "127.0.0.1".into()
+}
+fn default_redis_url() -> String {
+    "redis://127.0.0.1:6379/0".into()
+}
+fn default_secret_key() -> String {
+    "change-me-in-production".into()
+}
+fn default_session_cookie_name() -> String {
+    "workshop_session".into()
+}
+fn default_session_max_age() -> u64 {
+    604_800
+}
+fn default_stream_prefix() -> String {
+    "ws:channel:".into()
+}
+fn default_topics_key() -> String {
+    "ws:channel:__topics".into()
+}
+fn default_ttl_seconds() -> u64 {
+    1_800
+}
+fn default_trim_interval() -> u64 {
+    60
+}
+fn default_max_stream_len() -> u64 {
+    500
+}
 fn default_allowed_origins() -> Vec<String> {
-    vec!["http://localhost:3000".into(), "http://localhost:10101".into()]
+    vec![
+        "http://localhost:3000".into(),
+        "http://localhost:10101".into(),
+    ]
 }
 
 impl Default for ServiceConfig {

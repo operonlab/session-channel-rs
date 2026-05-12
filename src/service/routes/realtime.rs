@@ -217,37 +217,37 @@ async fn sse_stream(
     let mut rx = state.sse.subscribe();
 
     let stream = async_stream::stream! {
-            loop {
-                match rx.recv().await {
-                    Ok(envelope) => {
-                        // Apply topic filter if set
-                        if let Some(ref t) = topic_filter {
-                            if envelope.get("topic").and_then(|v| v.as_str()) != Some(t.as_str()) {
-                                continue;
-                            }
+        loop {
+            match rx.recv().await {
+                Ok(envelope) => {
+                    // Apply topic filter if set
+                    if let Some(ref t) = topic_filter {
+                        if envelope.get("topic").and_then(|v| v.as_str()) != Some(t.as_str()) {
+                            continue;
                         }
-                        let data = match serde_json::to_string(&envelope) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "SSE serialize error");
-                                continue;
-                            }
-                        };
-                        yield Ok::<Event, std::convert::Infallible>(Event::default().data(data));
                     }
-                    Err(RecvError::Lagged(n)) => {
-                        tracing::warn!(dropped = n, "SSE receiver lagged — dropping messages");
-                        // Continue streaming; do not disconnect
-                        continue;
-                    }
-                    Err(RecvError::Closed) => {
-                        // Broadcast channel closed — end stream cleanly
-                        tracing::info!("SSE broadcast channel closed");
-                        break;
-                    }
+                    let data = match serde_json::to_string(&envelope) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "SSE serialize error");
+                            continue;
+                        }
+                    };
+                    yield Ok::<Event, std::convert::Infallible>(Event::default().data(data));
+                }
+                Err(RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped = n, "SSE receiver lagged — dropping messages");
+                    // Continue streaming; do not disconnect
+                    continue;
+                }
+                Err(RecvError::Closed) => {
+                    // Broadcast channel closed — end stream cleanly
+                    tracing::info!("SSE broadcast channel closed");
+                    break;
                 }
             }
-        };
+        }
+    };
 
     let sse_response = Sse::new(stream).keep_alive(
         KeepAlive::new()

@@ -159,7 +159,10 @@ fn killer_malformed_cookie_returns_none_not_panic() {
     // 1 dot, no dots, 4+ dots — all malformed; must return None, not panic
     for malformed in &["not-a-cookie", "only.two", "a.b.c.d", "", "..."] {
         let id = extract_identity(None, None, Some(malformed), "k", 3600);
-        assert!(id.is_none(), "malformed cookie {malformed:?} should yield None");
+        assert!(
+            id.is_none(),
+            "malformed cookie {malformed:?} should yield None"
+        );
     }
 }
 

@@ -8,7 +8,6 @@
 /// - Auth key: "change-me-in-production" (default from config.py)
 ///
 /// HARD RULE: Do not read src/**. This is a black-box HTTP parity test.
-
 use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use std::process::{Child, Command, Stdio};
@@ -115,11 +114,10 @@ fn authed_get(url: &str) -> Value {
         .send()
         .unwrap_or_else(|e| panic!("GET {url} failed: {e}"));
     let status = resp.status();
-    let body: Value = resp.json().unwrap_or_else(|e| panic!("GET {url} bad json: {e}"));
-    assert!(
-        status.is_success(),
-        "GET {url} returned {status}: {body}"
-    );
+    let body: Value = resp
+        .json()
+        .unwrap_or_else(|e| panic!("GET {url} bad json: {e}"));
+    assert!(status.is_success(), "GET {url} returned {status}: {body}");
     body
 }
 
@@ -143,7 +141,8 @@ fn shape_eq(a: &Value, b: &Value) -> bool {
             if ao.len() != bo.len() {
                 return false;
             }
-            ao.iter().all(|(k, v)| bo.get(k).map_or(false, |bv| shape_eq(v, bv)))
+            ao.iter()
+                .all(|(k, v)| bo.get(k).is_some_and(|bv| shape_eq(v, bv)))
         }
         (Value::Array(aa), Value::Array(ba)) => {
             aa.len() == ba.len() && aa.iter().zip(ba.iter()).all(|(x, y)| shape_eq(x, y))
@@ -198,10 +197,7 @@ fn test_health_parity() {
         rust_h["status"], "ok",
         "Rust /health status != ok: {rust_h}"
     );
-    assert_eq!(
-        py_h["status"], "ok",
-        "Python /health status != ok: {py_h}"
-    );
+    assert_eq!(py_h["status"], "ok", "Python /health status != ok: {py_h}");
     assert_eq!(
         rust_h["redis"], true,
         "Rust /health redis field not true: {rust_h}"
@@ -212,16 +208,8 @@ fn test_health_parity() {
     );
 
     // Shape: both must have the same top-level keys
-    let rust_keys: std::collections::BTreeSet<_> = rust_h
-        .as_object()
-        .unwrap()
-        .keys()
-        .collect();
-    let py_keys: std::collections::BTreeSet<_> = py_h
-        .as_object()
-        .unwrap()
-        .keys()
-        .collect();
+    let rust_keys: std::collections::BTreeSet<_> = rust_h.as_object().unwrap().keys().collect();
+    let py_keys: std::collections::BTreeSet<_> = py_h.as_object().unwrap().keys().collect();
     assert_eq!(
         rust_keys, py_keys,
         "Health response key sets differ: Rust={rust_keys:?} Python={py_keys:?}"
@@ -337,8 +325,16 @@ fn test_wrong_key_returns_401_parity() {
         .send()
         .unwrap();
 
-    assert_eq!(resp_rust.status().as_u16(), 401, "Rust wrong-key should 401");
-    assert_eq!(resp_py.status().as_u16(), 401, "Python wrong-key should 401");
+    assert_eq!(
+        resp_rust.status().as_u16(),
+        401,
+        "Rust wrong-key should 401"
+    );
+    assert_eq!(
+        resp_py.status().as_u16(),
+        401,
+        "Python wrong-key should 401"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -390,7 +386,10 @@ fn test_post_message_and_read_parity() {
     assert_eq!(rm["sender"], pm["sender"], "message sender differs");
     assert_eq!(rm["tag"], pm["tag"], "message tag differs");
     assert_eq!(rm["topic"], pm["topic"], "message topic differs");
-    assert_eq!(rm["id"], pm["id"], "message id differs (should be same Redis ID)");
+    assert_eq!(
+        rm["id"], pm["id"],
+        "message id differs (should be same Redis ID)"
+    );
 
     redis_cleanup(topic);
 }
@@ -505,11 +504,11 @@ fn test_read_bogus_order_parity() {
 
     // Both must be client errors (4xx)
     assert!(
-        rust_status >= 400 && rust_status < 500,
+        (400..500).contains(&rust_status),
         "Rust bogus order should be 4xx, got {rust_status}"
     );
     assert!(
-        py_status >= 400 && py_status < 500,
+        (400..500).contains(&py_status),
         "Python bogus order should be 4xx, got {py_status}"
     );
 }
@@ -647,7 +646,11 @@ fn test_auth_wrong_key_parity() {
 fn test_auth_no_key_parity() {
     ensure_rust_service();
 
-    for path in ["/api/topics", "/api/messages/any-topic", "/api/agents/active"] {
+    for path in [
+        "/api/topics",
+        "/api/messages/any-topic",
+        "/api/agents/active",
+    ] {
         let resp_rust = client().get(rust_url(path)).send().unwrap();
         let resp_py = client().get(py_url(path)).send().unwrap();
 
@@ -657,8 +660,14 @@ fn test_auth_no_key_parity() {
         let rust_body: Value = resp_rust.json().unwrap_or_default();
         let py_body: Value = resp_py.json().unwrap_or_default();
 
-        assert_eq!(rs, 401, "Rust {path} no-auth should 401, got {rs}: {rust_body}");
-        assert_eq!(ps, 401, "Python {path} no-auth should 401, got {ps}: {py_body}");
+        assert_eq!(
+            rs, 401,
+            "Rust {path} no-auth should 401, got {rs}: {rust_body}"
+        );
+        assert_eq!(
+            ps, 401,
+            "Python {path} no-auth should 401, got {ps}: {py_body}"
+        );
 
         // PARITY BUG: Rust uses {"error":"unauthorized"}, Python uses {"detail":"Not authenticated"}
         // Both are 401 (status matches), but error body format differs.
@@ -716,7 +725,8 @@ fn test_sse_smoke_rust() {
                 r.status()
             );
             // Just verify we got an SSE-formatted response header
-            let ct = r.headers()
+            let ct = r
+                .headers()
                 .get("content-type")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");

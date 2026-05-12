@@ -10,7 +10,6 @@
 ///     trick where applicable).
 ///
 /// Real Redis on 127.0.0.1:6379/0 is required.
-
 use redis::AsyncCommands;
 use session_channel_rs::service::store;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -47,11 +46,12 @@ async fn cleanup(r: &mut redis::aio::ConnectionManager, topic: &str) {
 }
 
 /// Retrieve a specific field value from a StreamEntry's field list.
-fn get_field<'a>(
-    entry: &'a store::StreamEntry,
-    key: &str,
-) -> Option<&'a str> {
-    entry.fields.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+fn get_field<'a>(entry: &'a store::StreamEntry, key: &str) -> Option<&'a str> {
+    entry
+        .fields
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,11 +82,23 @@ async fn test_publish_range_oldest_roundtrip() {
 
     cleanup(&mut r, &topic).await;
 
-    assert_eq!(entries.len(), 1, "expected exactly 1 entry after one publish");
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly 1 entry after one publish"
+    );
     let e = &entries[0];
     assert_eq!(e.id, id, "returned id must match the published id");
-    assert_eq!(get_field(e, "text"), Some("hi"), "text field must round-trip");
-    assert_eq!(get_field(e, "sender"), Some("me"), "sender field must round-trip");
+    assert_eq!(
+        get_field(e, "text"),
+        Some("hi"),
+        "text field must round-trip"
+    );
+    assert_eq!(
+        get_field(e, "sender"),
+        Some("me"),
+        "sender field must round-trip"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -149,7 +161,11 @@ async fn test_range_newest_chronological_order() {
 
     cleanup(&mut r, &topic).await;
 
-    assert_eq!(entries.len(), 3, "range_newest count=3 must return exactly 3 entries");
+    assert_eq!(
+        entries.len(),
+        3,
+        "range_newest count=3 must return exactly 3 entries"
+    );
     // Must be chronological: texts are "3", "4", "5"
     let texts: Vec<&str> = entries
         .iter()
@@ -199,7 +215,10 @@ async fn test_trim_expired_drops_old_messages() {
 
     // Stream should be empty (or gone)
     let xlen_after: u64 = r.xlen(&stream_key).await.unwrap_or(0);
-    assert_eq!(xlen_after, 0, "old messages must be trimmed by trim_expired");
+    assert_eq!(
+        xlen_after, 0,
+        "old messages must be trimmed by trim_expired"
+    );
 
     // Topic must be SREM'd from the set
     let still_member: bool = r.sismember(TOPICS_KEY, &topic).await.unwrap();
@@ -224,16 +243,25 @@ async fn test_list_active_agents_last_write_wins() {
 
     let host = format!("testhost-lww-{}", now_ms());
     let pane = "testpane-lww";
-    let meta_1 = format!(r#"{{"host":"{}","pane":"{}","role":"worker","ctx_pct":10}}"#, host, pane);
-    let meta_2 = format!(r#"{{"host":"{}","pane":"{}","role":"main","ctx_pct":99}}"#, host, pane);
+    let meta_1 = format!(
+        r#"{{"host":"{}","pane":"{}","role":"worker","ctx_pct":10}}"#,
+        host, pane
+    );
+    let meta_2 = format!(
+        r#"{{"host":"{}","pane":"{}","role":"main","ctx_pct":99}}"#,
+        host, pane
+    );
 
     // XADD two messages for the same host:pane — second one should win
     let _: String = redis::cmd("XADD")
         .arg(&agents_stream)
         .arg("*")
-        .arg("text").arg("first")
-        .arg("sender").arg("agent1")
-        .arg("_meta").arg(&meta_1)
+        .arg("text")
+        .arg("first")
+        .arg("sender")
+        .arg("agent1")
+        .arg("_meta")
+        .arg(&meta_1)
         .query_async(&mut r)
         .await
         .unwrap();
@@ -241,9 +269,12 @@ async fn test_list_active_agents_last_write_wins() {
     let _: String = redis::cmd("XADD")
         .arg(&agents_stream)
         .arg("*")
-        .arg("text").arg("second")
-        .arg("sender").arg("agent1")
-        .arg("_meta").arg(&meta_2)
+        .arg("text")
+        .arg("second")
+        .arg("sender")
+        .arg("agent1")
+        .arg("_meta")
+        .arg(&meta_2)
         .query_async(&mut r)
         .await
         .unwrap();
@@ -291,16 +322,23 @@ async fn test_list_active_agents_leave_tag_removes_agent() {
 
     let host = format!("testhost-leave-{}", now_ms());
     let pane = "testpane-leave";
-    let meta = format!(r#"{{"host":"{}","pane":"{}","role":"worker","ctx_pct":5}}"#, host, pane);
+    let meta = format!(
+        r#"{{"host":"{}","pane":"{}","role":"worker","ctx_pct":5}}"#,
+        host, pane
+    );
 
     // First: announce
     let _: String = redis::cmd("XADD")
         .arg(&agents_stream)
         .arg("*")
-        .arg("text").arg("joining")
-        .arg("tag").arg("announce")
-        .arg("sender").arg("agent-leave-test")
-        .arg("_meta").arg(&meta)
+        .arg("text")
+        .arg("joining")
+        .arg("tag")
+        .arg("announce")
+        .arg("sender")
+        .arg("agent-leave-test")
+        .arg("_meta")
+        .arg(&meta)
         .query_async(&mut r)
         .await
         .unwrap();
@@ -309,10 +347,14 @@ async fn test_list_active_agents_leave_tag_removes_agent() {
     let _: String = redis::cmd("XADD")
         .arg(&agents_stream)
         .arg("*")
-        .arg("text").arg("leaving")
-        .arg("tag").arg("leave")
-        .arg("sender").arg("agent-leave-test")
-        .arg("_meta").arg(&meta)
+        .arg("text")
+        .arg("leaving")
+        .arg("tag")
+        .arg("leave")
+        .arg("sender")
+        .arg("agent-leave-test")
+        .arg("_meta")
+        .arg(&meta)
         .query_async(&mut r)
         .await
         .unwrap();
@@ -347,15 +389,24 @@ async fn test_list_active_agents_sort_order() {
 
     // Agent A: role=main, ctx=10%
     let host_a = format!("sorthost-a-{}", run_id);
-    let meta_a = format!(r#"{{"host":"{}","pane":"p1","role":"main","ctx_pct":10}}"#, host_a);
+    let meta_a = format!(
+        r#"{{"host":"{}","pane":"p1","role":"main","ctx_pct":10}}"#,
+        host_a
+    );
     // Agent B: role=worker, ctx=80%
     let host_b = format!("sorthost-b-{}", run_id);
-    let meta_b = format!(r#"{{"host":"{}","pane":"p1","role":"worker","ctx_pct":80}}"#, host_b);
+    let meta_b = format!(
+        r#"{{"host":"{}","pane":"p1","role":"worker","ctx_pct":80}}"#,
+        host_b
+    );
     // Agent C: role=main, ctx=50%
     let host_c = format!("sorthost-c-{}", run_id);
-    let meta_c = format!(r#"{{"host":"{}","pane":"p1","role":"main","ctx_pct":50}}"#, host_c);
+    let meta_c = format!(
+        r#"{{"host":"{}","pane":"p1","role":"main","ctx_pct":50}}"#,
+        host_c
+    );
 
-    for (host, meta, label) in [
+    for (_host, meta, label) in [
         (&host_a, &meta_a, "agent-A"),
         (&host_b, &meta_b, "agent-B"),
         (&host_c, &meta_c, "agent-C"),
@@ -363,9 +414,12 @@ async fn test_list_active_agents_sort_order() {
         let _: String = redis::cmd("XADD")
             .arg(&agents_stream)
             .arg("*")
-            .arg("text").arg(label)
-            .arg("sender").arg(label)
-            .arg("_meta").arg(meta.as_str())
+            .arg("text")
+            .arg(label)
+            .arg("sender")
+            .arg(label)
+            .arg("_meta")
+            .arg(meta.as_str())
             .query_async(&mut r)
             .await
             .unwrap();
@@ -400,10 +454,7 @@ async fn test_list_active_agents_sort_order() {
         .map(|a| {
             let meta = a.get("_meta").and_then(|m| m.as_object()).unwrap();
             let role = meta.get("role").and_then(|v| v.as_str()).unwrap_or("");
-            let ctx = meta
-                .get("ctx_pct")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
+            let ctx = meta.get("ctx_pct").and_then(|v| v.as_i64()).unwrap_or(0);
             (role, ctx)
         })
         .collect();
@@ -491,16 +542,9 @@ async fn test_range_newest_reversal_mutation_killer() {
     // Publish with explicit known values so we can distinguish them
     let labels = ["alpha", "beta", "gamma", "delta", "epsilon"];
     for label in &labels {
-        store::publish(
-            &mut r,
-            PREFIX,
-            TOPICS_KEY,
-            &topic,
-            &[("text", label)],
-            100,
-        )
-        .await
-        .expect("publish should succeed");
+        store::publish(&mut r, PREFIX, TOPICS_KEY, &topic, &[("text", label)], 100)
+            .await
+            .expect("publish should succeed");
     }
 
     // range_newest(3) must return LAST 3 in chronological order
@@ -539,7 +583,10 @@ async fn test_list_topics_srem_mutation_killer() {
 
     // Pre-condition: ghost is in the set
     let pre_member: bool = r.sismember(TOPICS_KEY, &ghost).await.unwrap();
-    assert!(pre_member, "pre-condition: ghost must be in the set before list_topics");
+    assert!(
+        pre_member,
+        "pre-condition: ghost must be in the set before list_topics"
+    );
 
     // Call list_topics — triggers the SREM side-effect
     let _topics = store::list_topics(&mut r, PREFIX, TOPICS_KEY)
@@ -586,7 +633,8 @@ async fn test_trim_expired_offbyone_boundary_survives() {
     let _: String = redis::cmd("XADD")
         .arg(&stream_key)
         .arg(&expired_id)
-        .arg("text").arg("expired-message")
+        .arg("text")
+        .arg("expired-message")
         .query_async(&mut r)
         .await
         .unwrap();
@@ -596,7 +644,8 @@ async fn test_trim_expired_offbyone_boundary_survives() {
     let _: String = redis::cmd("XADD")
         .arg(&stream_key)
         .arg(&fresh_id)
-        .arg("text").arg("fresh-message")
+        .arg("text")
+        .arg("fresh-message")
         .query_async(&mut r)
         .await
         .unwrap();
@@ -623,9 +672,12 @@ async fn test_trim_expired_offbyone_boundary_survives() {
         xlen
     );
 
-    let surviving_text = remaining
-        .first()
-        .and_then(|(_, fields)| fields.iter().find(|(k, _)| k == "text").map(|(_, v)| v.as_str()));
+    let surviving_text = remaining.first().and_then(|(_, fields)| {
+        fields
+            .iter()
+            .find(|(k, _)| k == "text")
+            .map(|(_, v)| v.as_str())
+    });
     assert_eq!(
         surviving_text,
         Some("fresh-message"),

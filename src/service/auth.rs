@@ -58,8 +58,7 @@ fn derive_key(secret_key: &str) -> Vec<u8> {
 
 /// Compute HMAC-SHA1 over `message` using the derived key.
 fn hmac_sha1(key: &[u8], message: &[u8]) -> Vec<u8> {
-    let mut mac =
-        HmacSha1::new_from_slice(key).expect("HMAC-SHA1 accepts any key length");
+    let mut mac = HmacSha1::new_from_slice(key).expect("HMAC-SHA1 accepts any key length");
     mac.update(message);
     mac.finalize().into_bytes().to_vec()
 }
@@ -169,8 +168,8 @@ pub fn verify(secret_key: &str, cookie: &str, max_age_seconds: u64) -> Result<St
     let payload_bytes = URL_SAFE_NO_PAD
         .decode(b64_payload)
         .map_err(|e| anyhow!("bad payload base64: {e}"))?;
-    let payload = String::from_utf8(payload_bytes)
-        .map_err(|e| anyhow!("payload is not valid UTF-8: {e}"))?;
+    let payload =
+        String::from_utf8(payload_bytes).map_err(|e| anyhow!("payload is not valid UTF-8: {e}"))?;
 
     Ok(payload)
 }
@@ -192,9 +191,7 @@ pub fn extract_identity(
     max_age_seconds: u64,
 ) -> Option<AuthIdentity> {
     // 1. Local-key shortcut
-    let is_local_key = local_key_header
-        .map(|h| h == secret_key)
-        .unwrap_or(false)
+    let is_local_key = local_key_header.map(|h| h == secret_key).unwrap_or(false)
         || key_query.map(|q| q == secret_key).unwrap_or(false);
 
     if is_local_key {

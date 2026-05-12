@@ -69,9 +69,7 @@ fn build_cors(cfg: &ServiceConfig) -> CorsLayer {
     // Mirrors Python main.py CORS setup; allow_origins read from config.
     // If allowed_origins is empty we fall through to permissive (dev) — same
     // behaviour as Python's empty list path.
-    let cors = CorsLayer::new()
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = CorsLayer::new().allow_methods(Any).allow_headers(Any);
 
     if cfg.allowed_origins.is_empty() {
         cors.allow_origin(Any)
@@ -84,7 +82,7 @@ fn build_cors(cfg: &ServiceConfig) -> CorsLayer {
         }
         // Self-origin always appended (port may be ephemeral in tests).
         if let Ok(self_origin) = format!("http://localhost:{}", cfg.port).parse() {
-            if !origins.iter().any(|o| o == &self_origin) {
+            if !origins.contains(&self_origin) {
                 origins.push(self_origin);
             }
         }

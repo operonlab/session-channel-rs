@@ -43,8 +43,7 @@ struct Message {
 pub fn run(args: Args) -> Result<()> {
     let count_str = args.count.to_string();
     let order = if args.oldest { "oldest" } else { "newest" };
-    let query: Vec<(&str, &str)> =
-        vec![("count", count_str.as_str()), ("order", order)];
+    let query: Vec<(&str, &str)> = vec![("count", count_str.as_str()), ("order", order)];
 
     let client = ApiClient::new()?;
     let path = format!("/api/messages/{}", args.topic);

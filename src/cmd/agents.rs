@@ -45,9 +45,9 @@ struct Agent {
 fn cli_icon(cli: &str) -> &'static str {
     match cli {
         "claude" => "🔷",
-        "codex"  => "🔶",
+        "codex" => "🔶",
         "gemini" => "💎",
-        _        => "·",
+        _ => "·",
     }
 }
 
@@ -98,8 +98,7 @@ fn meta_str<'a>(meta: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> 
 pub fn run(args: Args) -> Result<()> {
     let w = args.within.to_string();
     let client = ApiClient::new()?;
-    let resp: AgentsResp =
-        client.get_json("/api/agents/active", &[("within", w.as_str())])?;
+    let resp: AgentsResp = client.get_json("/api/agents/active", &[("within", w.as_str())])?;
 
     let agents = &resp.agents;
     if agents.is_empty() {
@@ -153,7 +152,9 @@ pub fn run(args: Args) -> Result<()> {
         // branch / task — truncated.
         // Python uses `(m.get("branch") or "-")` which falls back on None AND
         // empty string; replicate that by treating "" the same as None.
-        let branch_raw = meta_str(m, "branch").filter(|s| !s.is_empty()).unwrap_or("-");
+        let branch_raw = meta_str(m, "branch")
+            .filter(|s| !s.is_empty())
+            .unwrap_or("-");
         let branch: String = branch_raw.chars().take(18).collect();
 
         let task_raw = meta_str(m, "task").filter(|s| !s.is_empty()).unwrap_or("-");
@@ -186,10 +187,7 @@ pub fn run(args: Args) -> Result<()> {
         Some(Value::String(s)) => s.clone(),
         _ => args.within.to_string(),
     };
-    println!(
-        "--- {} agents in last {}s ---",
-        resp.count, within_val
-    );
+    println!("--- {} agents in last {}s ---", resp.count, within_val);
 
     Ok(())
 }
