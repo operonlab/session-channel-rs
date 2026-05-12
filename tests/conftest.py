@@ -1,10 +1,10 @@
 """Pytest fixtures for session-channel board v2 tests.
 
-Run:
-    cd /Users/joneshong/workshop/.claude/worktrees/feature+session-channel-team-parity-v2
-    ~/.local/bin/python3 -m pytest stations/session-channel/tests/ -v
+Run from the session-channel root:
+    cd <session-channel-root>
+    python3 -m pytest tests/ -v
     # skip stress tests
-    ~/.local/bin/python3 -m pytest stations/session-channel/tests/ -v -m "not slow"
+    python3 -m pytest tests/ -v -m "not slow"
 
 Optional deps (tests skip cleanly if missing):
     pip install fakeredis freezegun pytest-asyncio
