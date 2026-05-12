@@ -5,7 +5,7 @@
 
 use std::process::ExitCode;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use clap::Args as ClapArgs;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -62,11 +62,23 @@ pub fn run(args: Args) -> Result<()> {
     let meta = if args.meta.is_empty() {
         None
     } else {
-        let v: Value = serde_json::from_str(&args.meta).context("--meta must be valid JSON")?;
-        match v {
-            Value::Object(m) => Some(m),
-            _ => {
-                bail!("--meta must be a JSON object (got list/string/etc)");
+        match serde_json::from_str::<Value>(&args.meta) {
+            Err(err) => {
+                eprintln!("❌ --meta must be valid JSON: {err}");
+                std::process::exit(2);
+            }
+            Ok(Value::Object(m)) => Some(m),
+            Ok(other) => {
+                let kind = match &other {
+                    Value::Array(_) => "list",
+                    Value::String(_) => "string",
+                    Value::Number(_) => "number",
+                    Value::Bool(_) => "bool",
+                    Value::Null => "null",
+                    Value::Object(_) => unreachable!(),
+                };
+                eprintln!("❌ --meta must be a JSON object (got {kind})");
+                std::process::exit(2);
             }
         }
     };
