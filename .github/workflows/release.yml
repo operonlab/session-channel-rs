@@ -93,25 +93,62 @@ jobs:
         id: tag
         run: echo "TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      # Bundle both binaries into a single tarball for the release asset.
+      # Bundle binaries + LICENSE + README into a single tarball plus a SHA256
+      # checksum file. The checksum is required by the Homebrew tap formula
+      # (operonlab/homebrew-tap) for automated version bumps.
       # Name format: session-channel-<tag>-<triple>.tar.gz
       - name: Bundle tarball
         id: bundle
         run: |
+          set -euo pipefail
           TAG="${{ steps.tag.outputs.TAG }}"
           TRIPLE="${{ matrix.target }}"
           ARCHIVE="session-channel-${TAG}-${TRIPLE}.tar.gz"
           BIN_DIR="target/${TRIPLE}/release"
-          tar -czf "${ARCHIVE}" \
-            -C "${BIN_DIR}" channel channel-service
+          STAGE="$(mktemp -d)"
+          cp "${BIN_DIR}/channel" "${BIN_DIR}/channel-service" "${STAGE}/"
+          cp LICENSE README.md "${STAGE}/"
+          tar -czf "${ARCHIVE}" -C "${STAGE}" .
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          else
+            sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          fi
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+          echo "CHECKSUM=${ARCHIVE}.sha256" >> "$GITHUB_OUTPUT"
 
-      # Upload the tarball as a release asset. softprops/action-gh-release@v2
+      # Upload tarball + checksum as release assets. softprops/action-gh-release@v2
       # creates the Release automatically from the tag if one does not exist yet.
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.bundle.outputs.ARCHIVE }}
-          # Let the action generate the release name/body; you can add
-          # `body_path: CHANGELOG.md` here if you maintain one.
+          files: |
+            ${{ steps.bundle.outputs.ARCHIVE }}
+            ${{ steps.bundle.outputs.CHECKSUM }}
           generate_release_notes: true
+          body: |
+            ## Install
+
+            ### Docker (recommended)
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/operonlab/session-channel/main/docker-compose.yml -o docker-compose.yml
+            echo "SESSION_CHANNEL_KEY=$(openssl rand -hex 32)" > .env
+            docker compose up -d
+            ```
+
+            ### Homebrew (macOS / Linux)
+            ```bash
+            brew install operonlab/tap/session-channel
+            ```
+
+            ### One-line installer (any *nix)
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/operonlab/session-channel/main/install.sh | bash
+            ```
+
+            ### Manual
+            Download the tarball for your platform below, verify with the `.sha256`, and place `channel` + `channel-service` on your `$PATH`.
+
+            ---
+            <!-- generate_release_notes auto-appends commit log below -->
+

@@ -29,8 +29,7 @@ HTTP service on `:10101` (configurable). Drops in for the Python FastAPI service
 - **Live-swap verified**: Python service stopped, `channel-service` bound to `:10101`, Python CLI / dashboard / SSE all worked against the Rust service without modification.
 
 ### Known gaps in alpha
-- `cargo test` parallel run has a port-allocation race in `test_agents_active_parity` — use `--test-threads=1` for stable pass.
-- No cross-platform CI release binaries yet — users currently `cargo build` locally.
+- `test_agents_active_parity` is marked `#[ignore]` on dev boxes — it reads the shared `ws:channel:agents` stream and gets polluted by live `claude/codex/gemini-with-channel.sh` wrappers heartbeating during the test. CI runs it against an isolated Redis container via `cargo test -- --ignored`.
 - `channel send --meta <invalid-json>` prints anyhow's multi-line `Error: ... Caused by: ...` instead of Python's `❌ ...` one-liner.
 
 ## Wrappers & SSE push

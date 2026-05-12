@@ -46,7 +46,12 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: cargo test
-        # Port-allocation race in test_agents_active_parity — see CHANGELOG.
-        # Phase 2 will switch to dynamic ports and drop this flag.
-        run: cargo test -- --test-threads=1
+      - name: cargo test (default suite)
+        run: cargo test --tests
+
+      # `test_agents_active_parity` is marked #[ignore] because it reads the
+      # shared `ws:channel:agents` stream and is host-pollution-prone on dev
+      # boxes with live session-channel wrappers running. CI runs it
+      # explicitly against the isolated Redis service container.
+      - name: cargo test (ignored / parity)
+        run: cargo test --tests -- --ignored --test-threads=1

@@ -12,8 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CHANGELOG.md` (this file).
 - `CONTRIBUTING.md` with development workflow.
 - GitHub issue templates (`bug_report.md`, `feature_request.md`).
-- CI workflow `.github/workflows/test.yml` — runs `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo test` against a Redis 7 service container on every push and pull request.
-- `Cargo.toml` metadata: `homepage`, `documentation`, `readme`, `keywords`, `categories`, `rust-version`.
+- CI workflow `.github/workflows/test.yml` — runs `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo test` (default + `--ignored`) against a Redis 7 service container on every push and pull request.
+- `Cargo.toml` metadata: `homepage`, `documentation`, `readme`, `keywords`, `categories`, `rust-version` (1.82).
+- Release tarballs now include `LICENSE` and `README.md`, and ship with a `.sha256` companion file (used by Homebrew formula bumps).
+- Release notes auto-include install snippets (Docker / Homebrew / `install.sh`).
+
+### Changed
+- `test_agents_active_parity` marked `#[ignore]` — it reads the shared `ws:channel:agents` stream and is host-pollution-prone on dev boxes with live wrappers. CI runs it explicitly via `--ignored`.
+- `cargo test` in CI no longer needs `--test-threads=1` for the default suite.
 
 ## [0.2.0] — 2026-05-12
 

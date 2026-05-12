@@ -593,7 +593,16 @@ fn test_topics_parity() {
 // Group 3: Agents + Auth parity
 // ─────────────────────────────────────────────────────────────────────────────
 
+// NOTE: This test reads the shared `ws:channel:agents` stream against both
+// the Rust and Python services. Active session-channel wrappers running on
+// the *host* (Claude/Codex/Gemini panes) continuously heartbeat into that
+// stream during normal use, which causes the active-agent set to drift
+// between the two GETs — leading to flaky failures on developer machines.
+// CI runs against an isolated Redis container with no live heartbeats, so
+// the test passes there. We mark it `#[ignore]` so `cargo test` on a dev
+// box skips it by default; CI runs it explicitly with `--include-ignored`.
 #[test]
+#[ignore = "host-pollution-prone: shared ws:channel:agents stream is written to by live wrappers"]
 fn test_agents_active_parity() {
     let svc = new_test_service();
 
