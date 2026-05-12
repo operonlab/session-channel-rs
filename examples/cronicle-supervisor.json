@@ -1,0 +1,19 @@
+{
+  "_comment": "Cronicle event template for session-channel supervisor. Import via Cronicle's API or seed_jobs.py. Adjust paths to your install location.",
+  "id": "session-channel-supervisor",
+  "title": "session-channel supervisor",
+  "category": "session-channel",
+  "enabled": false,
+  "timing": {
+    "minutes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59]
+  },
+  "max_children": 1,
+  "timeout": 90,
+  "catch_up": false,
+  "queue": false,
+  "plugin": "shellplug",
+  "params": {
+    "script": "#!/usr/bin/env bash\nset -euo pipefail\nSESSION_CHANNEL_HOME=\"${SESSION_CHANNEL_HOME:-$HOME/.session-channel}\"\nexec \"${SESSION_CHANNEL_HOME}/.venv/bin/python3\" \"${SESSION_CHANNEL_HOME}/scripts/supervisor.py\""
+  },
+  "notes": "Respawns crashed relay-pool worker panes. Each tick scans config.yaml relay_pool.workers and re-launches the wrapper command if a pane has returned to its shell prompt for longer than grace_seconds. Set enabled=true after configuring relay_pool.workers in config.yaml."
+}
