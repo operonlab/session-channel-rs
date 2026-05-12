@@ -1,0 +1,32 @@
+[package]
+name = "session-channel-rs"
+version = "0.1.0-alpha.1"
+edition = "2021"
+license = "MIT"
+description = "Rust port of session-channel — CLI skeleton (send/read so far)"
+repository = "https://github.com/operonlab/session-channel-rs"
+authors = ["Jones Hong"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scope (2026-05-12 skeleton):
+#   - `channel send` and `channel read` against the existing Python service
+#   - Single binary `channel`
+#   - Service binary (axum + redis-rs) + remaining 6 cmds → next session
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[bin]]
+name = "channel"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
