@@ -129,12 +129,14 @@ pub fn run(args: Args) -> Result<()> {
         let icon = cli_icon(&cli);
 
         // pane: _meta.pane → agent.sender → "?"
+        // Python: m.get("pane") or a.get("sender") or "?" — falls back on empty string too.
         let pane = meta_str(m, "pane")
-            .or_else(|| a.sender.as_deref())
+            .filter(|s| !s.is_empty())
+            .or_else(|| a.sender.as_deref().filter(|s| !s.is_empty()))
             .unwrap_or("?");
 
-        // role
-        let role = meta_str(m, "role").unwrap_or("?");
+        // role — Python: m.get("role") or "?"
+        let role = meta_str(m, "role").filter(|s| !s.is_empty()).unwrap_or("?");
 
         // ctx_pct — numeric value → "N%" else "?"
         let ctx_s = match m.get("ctx_pct") {
@@ -148,17 +150,14 @@ pub fn run(args: Args) -> Result<()> {
             _ => "?".to_string(),
         };
 
-        // branch / task — truncated
-        let branch: String = meta_str(m, "branch")
-            .unwrap_or("-")
-            .chars()
-            .take(18)
-            .collect();
-        let task: String = meta_str(m, "task")
-            .unwrap_or("-")
-            .chars()
-            .take(28)
-            .collect();
+        // branch / task — truncated.
+        // Python uses `(m.get("branch") or "-")` which falls back on None AND
+        // empty string; replicate that by treating "" the same as None.
+        let branch_raw = meta_str(m, "branch").filter(|s| !s.is_empty()).unwrap_or("-");
+        let branch: String = branch_raw.chars().take(18).collect();
+
+        let task_raw = meta_str(m, "task").filter(|s| !s.is_empty()).unwrap_or("-");
+        let task: String = task_raw.chars().take(28).collect();
 
         // last_seen → age string
         let last_seen: f64 = match a.last_seen.as_ref() {
