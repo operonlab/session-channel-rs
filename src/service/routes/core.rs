@@ -98,7 +98,7 @@ fn is_authenticated(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
-        .route("/api/messages", post(stub_send))
+        .route("/api/messages", post(send_message))
         .route("/api/messages/:topic", get(read_messages))
         .route("/api/topics", get(list_topics))
 }
@@ -231,8 +231,124 @@ async fn list_topics(
     Ok(Json(json!({"topics": result})))
 }
 
-// ─── Stub (replaced in next commit) ──────────────────────────────────────────
+// ─── POST /api/messages ──────────────────────────────────────────────────────
 
-async fn stub_send() -> &'static str {
-    "core::send: not yet implemented"
+#[derive(Deserialize)]
+struct SendBody {
+    #[serde(default)]
+    topic: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    sender: String,
+    #[serde(default)]
+    tag: String,
+    #[serde(default)]
+    priority: String,
+    #[serde(default, rename = "_meta")]
+    meta: Option<Value>,
+}
+
+async fn send_message(
+    State(mut state): State<AppState>,
+    headers: HeaderMap,
+    Query(kq): Query<KeyQuery>,
+    Json(body): Json<SendBody>,
+) -> Result<Json<Value>, ApiError> {
+    if !is_authenticated(&headers, kq.key.as_deref(), &state.cfg) {
+        api_err!(StatusCode::UNAUTHORIZED, "Not authenticated");
+    }
+
+    let topic = body.topic.trim();
+    let text = body.text.trim();
+    let sender = if body.sender.trim().is_empty() {
+        "anon"
+    } else {
+        body.sender.trim()
+    };
+    let tag = body.tag.trim();
+    let priority = if body.priority.trim().is_empty() {
+        "normal"
+    } else {
+        body.priority.trim()
+    };
+
+    if topic.is_empty() || text.is_empty() {
+        api_err!(StatusCode::BAD_REQUEST, "topic and text required");
+    }
+    if topic.len() > 100 || text.len() > 4096 {
+        api_err!(
+            StatusCode::BAD_REQUEST,
+            "topic max 100, text max 4096 chars"
+        );
+    }
+    if priority != "normal" && priority != "high" {
+        api_err!(
+            StatusCode::BAD_REQUEST,
+            "priority must be normal or high"
+        );
+    }
+
+    // Serialize _meta to JSON string for the hash field (Python parity).
+    let meta_string: Option<String> = match &body.meta {
+        Some(Value::Object(_)) => {
+            let s = serde_json::to_string(&body.meta)
+                .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+            if s.len() > 8192 {
+                api_err!(StatusCode::BAD_REQUEST, "_meta max 8192 chars");
+            }
+            Some(s)
+        }
+        Some(_) => None, // ignore non-object meta (Python silently drops)
+        None => None,
+    };
+
+    check_rate(sender)?;
+
+    // Build the fields list (sender, text, priority, optional tag, optional _meta).
+    let mut fields: Vec<(&str, &str)> = vec![
+        ("sender", sender),
+        ("text", text),
+        ("priority", priority),
+    ];
+    if !tag.is_empty() {
+        fields.push(("tag", tag));
+    }
+    if let Some(ref m) = meta_string {
+        fields.push(("_meta", m.as_str()));
+    }
+
+    let msg_id = crate::service::store::publish(
+        &mut state.redis,
+        &state.cfg.stream_prefix,
+        &state.cfg.topics_key,
+        topic,
+        &fields,
+        state.cfg.max_stream_len,
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Broadcast to SSE clients.
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("id".into(), Value::String(msg_id.clone()));
+    envelope.insert("topic".into(), Value::String(topic.to_string()));
+    envelope.insert("sender".into(), Value::String(sender.to_string()));
+    envelope.insert("text".into(), Value::String(text.to_string()));
+    envelope.insert("priority".into(), Value::String(priority.to_string()));
+    if !tag.is_empty() {
+        envelope.insert("tag".into(), Value::String(tag.to_string()));
+    }
+    if let Some(parsed) = body.meta {
+        if parsed.is_object() {
+            envelope.insert("_meta".into(), parsed);
+        }
+    }
+    crate::service::sse::broadcast(&state.sse, Value::Object(envelope));
+
+    Ok(Json(json!({
+        "ok": true,
+        "id": msg_id,
+        "topic": topic,
+    })))
 }
