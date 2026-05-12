@@ -110,13 +110,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Session Channel", version="0.2.0", lifespan=lifespan)
 
+# CORS origins from config.yaml `allowed_origins` (or
+# $SESSION_CHANNEL_ALLOWED_ORIGINS env var). Always include the current
+# server port so the dashboard self-fetch works regardless of config.
+_cors_origins = list(config.allowed_origins)
+_self_origin = f"http://localhost:{config.port}"
+if _self_origin not in _cors_origins:
+    _cors_origins.append(_self_origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        f"http://localhost:{config.port}",
-        "https://workshop.joneshong.com",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -11,6 +11,14 @@ ttl_seconds: 1800
 trim_interval: 60
 max_stream_len: 500
 
+# CORS allow_origins. The current server port is auto-appended at runtime,
+# so listing it explicitly is optional. Override via env var:
+#   SESSION_CHANNEL_ALLOWED_ORIGINS="https://a.example,https://b.example"
+allowed_origins:
+  - "http://localhost:3000"
+  - "http://localhost:10101"
+  - "https://workshop.joneshong.com"
+
 # Relay pool supervisor configuration.
 # supervisor.py reads this to know which pane should run which worker.
 #

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from sdk_client.station_bootstrap import load_yaml_config
@@ -24,6 +24,12 @@ class Config:
     ttl_seconds: int = 1800
     trim_interval: int = 60
     max_stream_len: int = 500
+    allowed_origins: list[str] = field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://localhost:10101",
+        ]
+    )
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -46,6 +52,8 @@ def load_config(path: Path | None = None) -> Config:
             val = raw[key]
             expected = type(getattr(cfg, key))
             setattr(cfg, key, expected(val))
+    if "allowed_origins" in raw and isinstance(raw["allowed_origins"], list):
+        cfg.allowed_origins = [str(o) for o in raw["allowed_origins"]]
     # Env override for port — convenient for parallel worktrees / validation
     port_env = os.environ.get("SESSION_CHANNEL_PORT")
     if port_env:
@@ -53,6 +61,10 @@ def load_config(path: Path | None = None) -> Config:
             cfg.port = int(port_env)
         except ValueError:
             pass
+    # Env override for CORS origins (comma-separated)
+    origins_env = os.environ.get("SESSION_CHANNEL_ALLOWED_ORIGINS")
+    if origins_env:
+        cfg.allowed_origins = [o.strip() for o in origins_env.split(",") if o.strip()]
     return cfg
 
 
