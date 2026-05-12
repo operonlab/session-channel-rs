@@ -210,6 +210,7 @@ fn seed_messages(guard: &ServiceGuard, topic: &str, count: usize) {
 // Group 1: Health + Validation parity
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_health_parity() {
     let svc = new_test_service();
@@ -241,6 +242,7 @@ fn test_health_parity() {
     );
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_post_messages_empty_topic_parity() {
     let svc = new_test_service();
@@ -257,6 +259,7 @@ fn test_post_messages_empty_topic_parity() {
     );
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_post_messages_long_topic_parity() {
     let svc = new_test_service();
@@ -279,6 +282,7 @@ fn test_post_messages_long_topic_parity() {
     );
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_post_messages_bad_priority_parity() {
     let svc = new_test_service();
@@ -300,6 +304,7 @@ fn test_post_messages_bad_priority_parity() {
     );
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_no_auth_returns_401_parity() {
     let svc = new_test_service();
@@ -335,6 +340,7 @@ fn test_no_auth_returns_401_parity() {
     );
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_wrong_key_returns_401_parity() {
     let svc = new_test_service();
@@ -366,6 +372,7 @@ fn test_wrong_key_returns_401_parity() {
 // Group 2: Read + Topics parity
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_post_message_and_read_parity() {
     let svc = new_test_service();
@@ -419,6 +426,7 @@ fn test_post_message_and_read_parity() {
     redis_cleanup(topic);
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_read_order_newest_parity() {
     let svc = new_test_service();
@@ -461,6 +469,7 @@ fn test_read_order_newest_parity() {
     redis_cleanup(topic);
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_read_order_oldest_parity() {
     let svc = new_test_service();
@@ -502,6 +511,7 @@ fn test_read_order_oldest_parity() {
     redis_cleanup(topic);
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_read_bogus_order_parity() {
     let svc = new_test_service();
@@ -534,6 +544,7 @@ fn test_read_bogus_order_parity() {
     );
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_topics_parity() {
     let svc = new_test_service();
@@ -643,6 +654,7 @@ fn test_agents_active_parity() {
     }
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_auth_wrong_key_parity() {
     let svc = new_test_service();
@@ -672,6 +684,7 @@ fn test_auth_wrong_key_parity() {
     }
 }
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_auth_no_key_parity() {
     let svc = new_test_service();
@@ -713,6 +726,7 @@ fn test_auth_no_key_parity() {
 // SSE smoke test (best-effort — non-fatal if SSE streaming is slow)
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[ignore = "requires session-channel-py reference at PYTHON_PORT"]
 #[test]
 fn test_sse_smoke_rust() {
     let svc = new_test_service();

@@ -27,8 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README Quickstart section added between Install and Environment variables.
 
 ### Changed
-- `test_agents_active_parity` marked `#[ignore]` — it reads the shared `ws:channel:agents` stream and is host-pollution-prone on dev boxes with live wrappers. CI runs it explicitly via `--ignored`.
+- All tests in `tests/e2e_parity.rs` are now `#[ignore]` — they require an `operonlab/session-channel-py` reference service at `PYTHON_PORT` (10101 by default) for byte-level parity comparison; CI does not provision Python. Devs run `cargo test -- --ignored` locally on a box with the reference service. (Codex audit caught that CI would otherwise FAIL at `wait_for_health(PYTHON_PORT, …)` for every parity test.)
 - `cargo test` in CI no longer needs `--test-threads=1` for the default suite.
+- MSRV raised to **1.86** to match transitive deps `idna_adapter@1.2.2` + `icu_properties_data@2.2.0` (both require edition2024, stable in Rust 1.85; the deps further require 1.86). Builds against Rust 1.82–1.84 will fail.
+- Service now reads `SESSION_CHANNEL_HOST` env (default `127.0.0.1`). The Dockerfile and `docker-compose.yml` set this to `0.0.0.0` so the published container port is reachable.
+- README's `Compatibility with Python` section rewritten to consistently describe the Python implementation as *archived reference only*; previously the section still called Python "the reference implementation" while the top of the README declared Rust canonical (P8 cutover).
+- `.dockerignore` no longer carries a `!README.md` exception (the Dockerfile does not COPY README).
 
 ## [0.2.0] — 2026-05-12
 

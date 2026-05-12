@@ -185,6 +185,7 @@ Applies to every install path (Docker / Homebrew / `install.sh` / source). For D
 | `SESSION_CHANNEL_URL` | `http://localhost:10101` | CLI: target service base URL |
 | `SESSION_CHANNEL_KEY` | `change-me-in-production` | CLI: `x-local-key` value |
 | `SESSION_CHANNEL_PORT` | `10101` | Service: bind port |
+| `SESSION_CHANNEL_HOST` | `127.0.0.1` | Service: bind address. Set to `0.0.0.0` inside containers so the published port is reachable. |
 | `SESSION_CHANNEL_REDIS_URL` | `redis://127.0.0.1:6379/0` | Service: Redis URL |
 | `SESSION_CHANNEL_ALLOWED_ORIGINS` | (config.yaml) | Service: CORS allow-list (comma-sep) |
 | `SESSION_CHANNEL_HOME` | (auto-detect) | Service: optional config.yaml dir |
@@ -211,15 +212,15 @@ Applies to every install path (Docker / Homebrew / `install.sh` / source). For D
 
 The CLI binary uses `reqwest` blocking; the service binary uses `axum` + `tokio` + `redis-rs`.
 
-## Compatibility with Python
+## Compatibility with the archived Python implementation
 
-`session-channel` is byte-compatible with the archived Python reference on every public surface (CLI args, HTTP routes, Redis stream format, signed cookies). The two implementations can:
+The Rust implementation is byte-compatible with the archived Python reference at [`operonlab/session-channel-py`](https://github.com/operonlab/session-channel-py) on every public surface (CLI args, HTTP routes, Redis stream format, signed cookies). The two implementations can:
 
 - Coexist on the same Redis (different ports)
 - Issue signed cookies that the other validates
 - Be swapped at the service layer without changing CLIs, hooks, wrappers, or the dashboard
 
-The Python version (`operonlab/session-channel`, v0.2.0) remains the reference implementation while this Rust port stabilises. Following the upstream plan (`CHANGELOG.md` over there), the Rust port is **v2 polishing**, not a rewrite of unstable territory.
+The Rust port is the canonical implementation as of v0.2.0 (P8 cutover, 2026-05-12). The Python implementation is preserved for historical reference and parity verification only — new development lands here.
 
 ## License
 

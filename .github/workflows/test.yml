@@ -46,12 +46,11 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # The default suite covers unit + auth/cookie killers. Every test in
+      # tests/e2e_parity.rs is marked #[ignore] because they require a
+      # running operonlab/session-channel-py reference service at
+      # PYTHON_PORT (10101 by default) for byte-level parity comparison;
+      # CI does not provision Python. Devs run `cargo test -- --ignored`
+      # locally on a box with the reference service.
       - name: cargo test (default suite)
         run: cargo test --tests
-
-      # `test_agents_active_parity` is marked #[ignore] because it reads the
-      # shared `ws:channel:agents` stream and is host-pollution-prone on dev
-      # boxes with live session-channel wrappers running. CI runs it
-      # explicitly against the isolated Redis service container.
-      - name: cargo test (ignored / parity)
-        run: cargo test --tests -- --ignored --test-threads=1

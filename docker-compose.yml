@@ -26,6 +26,9 @@ services:
       SESSION_CHANNEL_REDIS_URL: redis://redis:6379/0
       SESSION_CHANNEL_KEY: ${SESSION_CHANNEL_KEY:-change-me-in-production}
       SESSION_CHANNEL_PORT: "10101"
+      # Container must bind 0.0.0.0 so the published port is reachable from
+      # outside; the Dockerfile already sets this, listed here for clarity.
+      SESSION_CHANNEL_HOST: "0.0.0.0"
       RUST_LOG: ${RUST_LOG:-info}
     ports:
       # Bind to 127.0.0.1 only — the bus is for local CLIs on this machine.

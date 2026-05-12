@@ -7,7 +7,7 @@
 name = "session-channel"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.86"
 license = "MIT"
 description = "session-channel — cross-pane, cross-CLI pub-sub bus over tmux + Redis Streams"
 repository = "https://github.com/operonlab/session-channel"

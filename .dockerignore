@@ -4,10 +4,8 @@ target/
 .worktrees/
 tests/
 wrappers/
-templates/
 docs/
 *.md
-!README.md
 .env
 .env.*
 !.env.example
