@@ -99,8 +99,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .route("/api/messages", post(stub_send))
-        .route("/api/messages/:topic", get(stub_read))
-        .route("/api/topics", get(stub_topics))
+        .route("/api/messages/:topic", get(read_messages))
+        .route("/api/topics", get(list_topics))
 }
 
 // ─── /health — no auth required ──────────────────────────────────────────────
@@ -120,19 +120,119 @@ async fn health(State(mut state): State<AppState>) -> Json<Value> {
     }
 }
 
-// ─── Stubs (replaced in follow-on commits) ───────────────────────────────────
+// ─── Shared query params ──────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct KeyQuery {
     key: Option<String>,
 }
 
+// ─── GET /api/messages/:topic ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ReadQuery {
+    since: Option<String>,
+    count: Option<u64>,
+    order: Option<String>,
+    key: Option<String>,
+}
+
+async fn read_messages(
+    State(mut state): State<AppState>,
+    headers: HeaderMap,
+    Path(topic): Path<String>,
+    Query(q): Query<ReadQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if !is_authenticated(&headers, q.key.as_deref(), &state.cfg) {
+        api_err!(StatusCode::UNAUTHORIZED, "Not authenticated");
+    }
+
+    let since = q.since.unwrap_or_else(|| "0-0".into());
+    let count = q.count.unwrap_or(50).min(200);
+    let order = q.order.unwrap_or_else(|| "oldest".into());
+
+    if order != "oldest" && order != "newest" {
+        api_err!(StatusCode::BAD_REQUEST, "order must be oldest or newest");
+    }
+
+    let entries = if order == "newest" {
+        crate::service::store::range_newest(
+            &mut state.redis,
+            &state.cfg.stream_prefix,
+            &topic,
+            count,
+        )
+        .await
+    } else {
+        crate::service::store::range_oldest(
+            &mut state.redis,
+            &state.cfg.stream_prefix,
+            &topic,
+            &since,
+            count,
+        )
+        .await
+    }
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let messages: Vec<Value> = entries
+        .into_iter()
+        .map(|entry| {
+            let mut map = serde_json::Map::new();
+            map.insert("id".into(), Value::String(entry.id));
+            map.insert("topic".into(), Value::String(topic.clone()));
+            for (k, v) in entry.fields {
+                if k == "_meta" {
+                    // _hydrate_meta: parse to JSON object; keep as string on failure.
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&v) {
+                        map.insert(k, parsed);
+                    } else {
+                        map.insert(k, Value::String(v));
+                    }
+                } else {
+                    map.insert(k, Value::String(v));
+                }
+            }
+            Value::Object(map)
+        })
+        .collect();
+
+    let count_out = messages.len();
+    Ok(Json(json!({
+        "messages": messages,
+        "count": count_out,
+    })))
+}
+
+// ─── GET /api/topics ─────────────────────────────────────────────────────────
+
+async fn list_topics(
+    State(mut state): State<AppState>,
+    headers: HeaderMap,
+    Query(kq): Query<KeyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if !is_authenticated(&headers, kq.key.as_deref(), &state.cfg) {
+        api_err!(StatusCode::UNAUTHORIZED, "Not authenticated");
+    }
+
+    let topics = crate::service::store::list_topics(
+        &mut state.redis,
+        &state.cfg.stream_prefix,
+        &state.cfg.topics_key,
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let result: Vec<Value> = topics
+        .into_iter()
+        .map(|(t, n)| json!({"topic": t, "count": n}))
+        .collect();
+
+    Ok(Json(json!({"topics": result})))
+}
+
+// ─── Stub (replaced in next commit) ──────────────────────────────────────────
+
 async fn stub_send() -> &'static str {
     "core::send: not yet implemented"
-}
-async fn stub_read() -> &'static str {
-    "core::read: not yet implemented"
-}
-async fn stub_topics() -> &'static str {
-    "core::topics: not yet implemented"
 }
