@@ -1,0 +1,47 @@
+# session-channel — Docker Compose stack
+#
+# `docker compose up -d` brings up Redis + channel-service on localhost:10101.
+# The CLI (`channel`) lives on the host — install it separately via Homebrew
+# or `install.sh`. See README for details.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  channel-service:
+    image: ghcr.io/operonlab/session-channel:${SESSION_CHANNEL_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      SESSION_CHANNEL_REDIS_URL: redis://redis:6379/0
+      SESSION_CHANNEL_KEY: ${SESSION_CHANNEL_KEY:-change-me-in-production}
+      SESSION_CHANNEL_PORT: "10101"
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      # Bind to 127.0.0.1 only — the bus is for local CLIs on this machine.
+      # Override to 0.0.0.0 deliberately if you actually want remote access.
+      - "127.0.0.1:10101:10101"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - -H
+        - "x-local-key: ${SESSION_CHANNEL_KEY:-change-me-in-production}"
+        - http://localhost:10101/health
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  redis-data:
