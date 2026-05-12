@@ -25,6 +25,8 @@ pub fn run(_args: Args) -> Result<()> {
     let client = ApiClient::new()?;
     let d: HealthResp = client.get_json("/health", &[])?;
     let status = if d.redis { "✅" } else { "❌" };
-    println!("{} redis={}  topics={}", status, d.redis, d.active_topics);
+    // Python str(bool) → "True"/"False" (capital first letter); match exactly.
+    let redis_str = if d.redis { "True" } else { "False" };
+    println!("{} redis={}  topics={}", status, redis_str, d.active_topics);
     Ok(())
 }
