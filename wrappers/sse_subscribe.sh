@@ -38,9 +38,15 @@ start_sse_listener() {
   fi
 
   (
+    # Backoff state: exponential 1s→2s→4s→…cap 60s, reset on success (≥5s).
+    local _backoff=1
+
     # Outer loop: reconnect on SSE drop. curl exits on connection close;
     # service binary keep-alive is 30s.
     while true; do
+      local _conn_start
+      _conn_start=$(date +%s)
+
       curl -s -N -H "x-local-key: $key" \
         "$base_url/api/stream?topic=tasks" 2>/dev/null \
         | while IFS= read -r line; do
@@ -87,8 +93,26 @@ start_sse_listener() {
                 ;;
             esac
           done
-      # If we got here, the curl pipeline closed — wait a moment, then reconnect.
-      sleep 2
+
+      # curl pipeline closed — apply exponential backoff with ±20% jitter.
+      # A connection lasting ≥5s counts as success → reset backoff to 1s.
+      local _conn_end
+      _conn_end=$(date +%s)
+      local _conn_dur=$(( _conn_end - _conn_start ))
+      if [ "$_conn_dur" -ge 5 ]; then
+        _backoff=1
+      fi
+
+      # jitter: ±20% of _backoff (integer arithmetic via RANDOM 0..32767)
+      # Simplified: sleep = _backoff*4/5 + RANDOM % (_backoff*2/5 + 1)
+      local _jitter_range=$(( _backoff * 2 / 5 + 1 ))
+      local _sleep=$(( _backoff * 4 / 5 + RANDOM % _jitter_range ))
+      [ "$_sleep" -lt 1 ] && _sleep=1
+      sleep "$_sleep"
+
+      # Double for next iteration, cap at 60s.
+      _backoff=$(( _backoff * 2 ))
+      [ "$_backoff" -gt 60 ] && _backoff=60
     done
   ) &
   SSE_PID=$!
