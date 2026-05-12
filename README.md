@@ -1,8 +1,8 @@
 # session-channel-rs
 
-Rust port of [`session-channel`](https://github.com/operonlab/session-channel) — a cross-pane, cross-CLI pub-sub bus over **tmux + Redis Streams**. **Alpha — `v0.1.0-alpha`.**
+Rust port of [`session-channel`](https://github.com/operonlab/session-channel) — a cross-pane, cross-CLI pub-sub bus over **tmux + Redis Streams**. **Alpha — `v0.1.0-alpha.2` released; `v0.1.0-alpha.3` in progress.**
 
-## Status (2026-05-12, v0.1.0-alpha)
+## Status (2026-05-12, v0.1.0-alpha.2 released)
 
 ### CLI (`channel`)
 1:1 port of all 8 Python subcommands. Byte-level parity verified against the Python CLI.
@@ -18,7 +18,7 @@ HTTP service on `:10101` (configurable). Drops in for the Python FastAPI service
 - ✅ `GET /api/topics` — SMEMBERS + per-topic XLEN, SREM empty topics
 - ✅ `GET /api/agents/active?within=N` — last-write-wins reduce by host:pane
 - ✅ `GET /api/stream` — SSE with `topic=` filter + 30s keep-alive
-- ✅ `GET /health` — Redis PING + topic count
+- ✅ `GET /health` — Redis PING + topic count; JSON key order matches Python (`status`, `redis`, `active_topics`)
 - ✅ `itsdangerous`-compatible signed cookies (HMAC-SHA1) — Python-issued cookies validate unchanged
 - ✅ Background trim loop (XTRIM `MINID`) + fanout loop (XREAD across topics)
 
@@ -27,10 +27,68 @@ HTTP service on `:10101` (configurable). Drops in for the Python FastAPI service
 - **Live-swap verified**: Python service stopped, `channel-service` bound to `:10101`, Python CLI / dashboard / SSE all worked against the Rust service without modification.
 
 ### Known gaps in alpha
-- JSON response key order: serde sorted vs Python dict-insertion. Functional parity confirmed by shape; byte-string diffs differ.
 - `cargo test` parallel run has a port-allocation race in `test_agents_active_parity` — use `--test-threads=1` for stable pass.
 - No cross-platform CI release binaries yet — users currently `cargo build` locally.
 - `channel send --meta <invalid-json>` prints anyhow's multi-line `Error: ... Caused by: ...` instead of Python's `❌ ...` one-liner.
+
+## Wrappers & SSE push
+
+`stations/session-channel/wrappers/` provides four shell scripts that turn any
+Claude Code / Codex / Gemini pane into a **registered session-channel worker**
+with bi-directional push delivery:
+
+| Script | What it does |
+|--------|-------------|
+| `claude-with-channel.sh` | Launches Claude Code; registers pane on startup; tears down on exit |
+| `codex-with-channel.sh` | Same for Codex CLI |
+| `gemini-with-channel.sh` | Same for Gemini CLI |
+| `sse_subscribe.sh` | Background SSE listener (sourced by the wrappers above) |
+
+### Push delivery loop
+
+```
+orchestrator                worker pane
+     │                           │
+     │  channel race / debate    │
+     │  (--workers pane list)    │
+     │──────────────────────────►│  dispatch via session-channel stream
+     │                           │
+     │                           │  sse_subscribe.sh (background)
+     │                           │  ╔═════════════════════════════╗
+     │                           │  ║ curl /api/stream (chunked)  ║
+     │                           │  ║ filter: topic=tasks         ║
+     │                           │  ║         tag=assign          ║
+     │                           │  ║         _meta.target==pane  ║
+     │                           │  ║ → tmux send-keys prompt     ║
+     │                           │  ╚═════════════════════════════╝
+     │                           │
+     │◄──────────────────────────│  channel send tasks "done" --tag done
+```
+
+**Minimal 5-line loop** (illustrates what `sse_subscribe.sh` does internally):
+
+```bash
+curl -sN -H "x-local-key: $KEY" \
+  "$BASE_URL/api/stream?topic=tasks" | while IFS= read -r line; do
+  [[ "$line" == data:* ]] || continue
+  payload="${line#data: }"
+  tmux send-keys -t "$PANE" "$(echo "$payload" | jq -r '.text')" Enter
+done
+```
+
+### CHANNEL_LOOP — opt-in respawn
+
+Gemini and Codex occasionally self-exit (e.g. after an idle timeout). Set
+`CHANNEL_LOOP=1` before running the wrapper to enable an auto-respawn loop:
+
+```bash
+CHANNEL_LOOP=1 gemini-with-channel.sh %7
+```
+
+When `CHANNEL_LOOP=1`, the wrapper re-launches the CLI each time it exits,
+re-registers the pane, and resumes the SSE listener — keeping the worker slot
+alive indefinitely. Claude Code does not need this (it does not self-exit), so
+`claude-with-channel.sh` ignores `CHANNEL_LOOP`.
 
 ## Build & run
 
@@ -62,6 +120,7 @@ cargo build --release --bins
 | `SESSION_CHANNEL_ALLOWED_ORIGINS` | (config.yaml) | Service: CORS allow-list (comma-sep) |
 | `SESSION_CHANNEL_HOME` | (auto-detect) | Service: optional config.yaml dir |
 | `TMUX_PANE` | (auto) | CLI: informs default `sender` field |
+| `CHANNEL_LOOP` | (unset) | Wrappers: set to `1` to enable auto-respawn |
 
 ## Architecture (same as Python — drop-in)
 
