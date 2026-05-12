@@ -1,0 +1,117 @@
+# Release workflow — session-channel-rs
+#
+# Fires on every `v*` tag push and builds pre-compiled binaries for four
+# target triples, then attaches them as assets to the GitHub Release.
+#
+# Cross-compilation strategy for aarch64-unknown-linux-gnu:
+#   We install `cross` (the Rust cross-compilation tool by cross-rs/cross)
+#   rather than `taiki-e/upload-rust-binary-action` so we avoid adding an
+#   unaudited third-party action. cross wraps cargo with a Docker toolchain
+#   image that already has the correct gcc linker — the only extra steps are
+#   `cargo install cross` and using `cross build` instead of `cargo build`.
+#
+# All four jobs share the same upload step (softprops/action-gh-release@v2)
+# which creates the GitHub Release if it does not already exist and appends
+# the tarball as an asset.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # required by softprops/action-gh-release to create/update releases
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+            use_cross: false
+
+          - target: aarch64-apple-darwin
+            os: macos-14
+            use_cross: false
+
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: false
+
+          # aarch64 Linux: native runner not available; use cross (Docker-based)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Install the stable Rust toolchain with the specific cross-compilation target.
+      # dtolnay/rust-toolchain is the idiomatic lightweight action for this.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Cache Cargo registry + compiled deps to speed up repeat tag builds.
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      # Install `cross` only for the aarch64-linux target.
+      # cross v0.2 ships its own Docker images with the right gcc linkers baked in.
+      - name: Install cross (aarch64-linux only)
+        if: matrix.use_cross == true
+        run: cargo install cross --locked
+
+      # Build all workspace binaries in release mode.
+      # `--bins` compiles every [[bin]] entry in Cargo.toml (channel + channel-service).
+      - name: Build binaries (cargo)
+        if: matrix.use_cross == false
+        run: cargo build --release --bins --target ${{ matrix.target }}
+
+      - name: Build binaries (cross)
+        if: matrix.use_cross == true
+        run: cross build --release --bins --target ${{ matrix.target }}
+
+      # Derive the tag name from the GITHUB_REF (e.g. refs/tags/v0.1.0 → v0.1.0).
+      - name: Derive tag name
+        id: tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      # Bundle both binaries into a single tarball for the release asset.
+      # Name format: session-channel-rs-<tag>-<triple>.tar.gz
+      - name: Bundle tarball
+        id: bundle
+        run: |
+          TAG="${{ steps.tag.outputs.TAG }}"
+          TRIPLE="${{ matrix.target }}"
+          ARCHIVE="session-channel-rs-${TAG}-${TRIPLE}.tar.gz"
+          BIN_DIR="target/${TRIPLE}/release"
+          tar -czf "${ARCHIVE}" \
+            -C "${BIN_DIR}" channel channel-service
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+
+      # Upload the tarball as a release asset. softprops/action-gh-release@v2
+      # creates the Release automatically from the tag if one does not exist yet.
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.bundle.outputs.ARCHIVE }}
+          # Let the action generate the release name/body; you can add
+          # `body_path: CHANGELOG.md` here if you maintain one.
+          generate_release_notes: true
