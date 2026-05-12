@@ -27,6 +27,7 @@ Cronicle job:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -43,7 +44,11 @@ DEFAULT_CONFIG = STATION_DIR / "config.yaml"
 
 WRAPPERS_DIR = STATION_DIR / "wrappers"
 CHANNEL_CLI = STATION_DIR / "cli" / "channel.py"
-PY = Path("/Users/joneshong/.local/bin/python3")
+# Python interpreter for invoking channel CLI. Override with $SESSION_CHANNEL_PY
+# (e.g. when the system python3 is too old). Falls back to sys.executable so
+# the supervisor's own interpreter is reused — works in any OSS install.
+_PY_OVERRIDE = os.environ.get("SESSION_CHANNEL_PY")
+PY = Path(_PY_OVERRIDE) if _PY_OVERRIDE else Path(sys.executable)
 
 # Worker spawn commands by cli_type. These mirror launch-relay-pool.sh logic.
 CLI_COMMANDS: dict[str, list[str]] = {
