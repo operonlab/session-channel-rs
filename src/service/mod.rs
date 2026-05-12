@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod dashboard;
 pub mod routes;
 pub mod sse;
 pub mod state;
@@ -37,6 +38,7 @@ pub async fn run() -> Result<()> {
     let cors = build_cors(&cfg);
 
     let app = Router::new()
+        .route("/", axum::routing::get(dashboard::dashboard))
         .merge(routes::router())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
