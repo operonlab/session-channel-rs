@@ -1,191 +1,159 @@
 # session-channel
 
-> Cross-pane, cross-CLI pub-sub bus over **tmux + Redis Streams** — give every coding agent (Claude Code / Codex / Gemini / generic) a shared inbox so they can race a prompt, debate an answer, or simply tell each other "task done".
+A cross-pane, cross-CLI pub-sub bus over **tmux + Redis Streams**. **Alpha — `v0.1.0-alpha.3` released; `v0.1.0-alpha.4` (post-cutover) in progress.**
 
-`session-channel` runs as a tiny FastAPI service on `localhost:10101`. It exposes:
+> The Rust implementation took over as the canonical `session-channel` on 2026-05-12 (P8 cutover); the original Python reference is archived at `stations/_archive/session-channel-py/` in the upstream monorepo. The GitHub repo URL keeps the historical `-rs` suffix (`operonlab/session-channel-rs`) so existing user clones don't break.
 
-- A **CLI** (`channel send`, `channel read`, `channel race`, `channel debate`, …) for humans and scripts
-- An **HTTP API** + **SSE stream** for live dashboards
-- A **wrapper layer** that turns any CLI agent into a "session-channel worker" (announce on launch, heartbeat while idle, leave on exit)
-- A **supervisor** that respawns crashed worker panes via Cronicle / systemd
+## Status (2026-05-12, post-P8 cutover)
 
-It is the orchestration plane behind the "blog tmux-as-bridge" pattern: every tmux pane becomes an addressable node, and you can dispatch / race / debate across them without writing custom IPC code.
+### CLI (`channel`)
+1:1 port of all 8 Python subcommands. Byte-level parity verified against the Python CLI.
 
----
+- ✅ `send` · `read` · `topics` · `health` · `agents` · `tasks` · `race` · `debate`
 
-## Quickstart
+### Service (`channel-service`)
+HTTP service on `:10101` (configurable). Drops in for the Python FastAPI service — Python CLIs, hooks, wrappers, and the dashboard all keep working unchanged.
 
-```bash
-# 1. Clone + install
-git clone https://github.com/operonlab/session-channel ~/.session-channel
-cd ~/.session-channel
-./install.sh          # creates venv, installs deps, symlinks `channel` into ~/.local/bin
+- ✅ `GET /` — dashboard (HTML embedded via `include_str!`, local-key injected)
+- ✅ `POST /api/messages` — publish + rate-limit (10/s per sender) + SSE fan-out
+- ✅ `GET /api/messages/:topic` — `since` / `count` / `order=oldest|newest`
+- ✅ `GET /api/topics` — SMEMBERS + per-topic XLEN, SREM empty topics
+- ✅ `GET /api/agents/active?within=N` — last-write-wins reduce by host:pane
+- ✅ `GET /api/stream` — SSE with `topic=` filter + 30s keep-alive
+- ✅ `GET /health` — Redis PING + topic count; JSON key order matches Python (`status`, `redis`, `active_topics`)
+- ✅ `itsdangerous`-compatible signed cookies (HMAC-SHA1) — Python-issued cookies validate unchanged
+- ✅ Background trim loop (XTRIM `MINID`) + fanout loop (XREAD across topics)
 
-# 2. Start Redis (any 5.0+ works; sample compose included)
-docker compose -f dist/docker-compose.yml up -d redis
+### Real-world validation
+- All 47 tests pass (9 inline auth + 11 data-flow + 15 E2E parity + 12 mutation-killer)
+- **Live-swap verified**: Python service stopped, `channel-service` bound to `:10101`, Python CLI / dashboard / SSE all worked against the Rust service without modification.
 
-# 3. Start the channel service
-python3 -m uvicorn main:app --host 127.0.0.1 --port 10101
+### Known gaps in alpha
+- `cargo test` parallel run has a port-allocation race in `test_agents_active_parity` — use `--test-threads=1` for stable pass.
+- No cross-platform CI release binaries yet — users currently `cargo build` locally.
+- `channel send --meta <invalid-json>` prints anyhow's multi-line `Error: ... Caused by: ...` instead of Python's `❌ ...` one-liner.
 
-# 4. Smoke test
-channel send broadcasts "hello from $(hostname)"
-channel read broadcasts --count 5
-channel topics
+## Wrappers & SSE push
+
+`stations/session-channel/wrappers/` provides four shell scripts that turn any
+Claude Code / Codex / Gemini pane into a **registered session-channel worker**
+with bi-directional push delivery:
+
+| Script | What it does |
+|--------|-------------|
+| `claude-with-channel.sh` | Launches Claude Code; registers pane on startup; tears down on exit |
+| `codex-with-channel.sh` | Same for Codex CLI |
+| `gemini-with-channel.sh` | Same for Gemini CLI |
+| `sse_subscribe.sh` | Background SSE listener (sourced by the wrappers above) |
+
+### Push delivery loop
+
+```
+orchestrator                worker pane
+     │                           │
+     │  channel race / debate    │
+     │  (--workers pane list)    │
+     │──────────────────────────►│  dispatch via session-channel stream
+     │                           │
+     │                           │  sse_subscribe.sh (background)
+     │                           │  ╔═════════════════════════════╗
+     │                           │  ║ curl /api/stream (chunked)  ║
+     │                           │  ║ filter: topic=tasks         ║
+     │                           │  ║         tag=assign          ║
+     │                           │  ║         _meta.target==pane  ║
+     │                           │  ║ → tmux send-keys prompt     ║
+     │                           │  ╚═════════════════════════════╝
+     │                           │
+     │◄──────────────────────────│  channel send tasks "done" --tag done
 ```
 
-Open `http://localhost:10101/` for the live dashboard.
+**Minimal 5-line loop** (illustrates what `sse_subscribe.sh` does internally):
 
----
+```bash
+curl -sN -H "x-local-key: $KEY" \
+  "$BASE_URL/api/stream?topic=tasks" | while IFS= read -r line; do
+  [[ "$line" == data:* ]] || continue
+  payload="${line#data: }"
+  tmux send-keys -t "$PANE" "$(echo "$payload" | jq -r '.text')" Enter
+done
+```
 
-## Why session-channel?
+### CHANNEL_LOOP — opt-in respawn
 
-| Existing tool | What it does | What it doesn't do |
+Gemini and Codex occasionally self-exit (e.g. after an idle timeout). Set
+`CHANNEL_LOOP=1` before running the wrapper to enable an auto-respawn loop:
+
+```bash
+CHANNEL_LOOP=1 gemini-with-channel.sh %7
+```
+
+When `CHANNEL_LOOP=1`, the wrapper re-launches the CLI each time it exits,
+re-registers the pane, and resumes the SSE listener — keeping the worker slot
+alive indefinitely. Claude Code does not need this (it does not self-exit), so
+`claude-with-channel.sh` ignores `CHANNEL_LOOP`.
+
+## Build & run
+
+```bash
+git clone https://github.com/operonlab/session-channel-rs session-channel
+cd session-channel
+cargo build --release --bins
+
+# Start the service (replaces the Python uvicorn)
+./target/release/channel-service
+
+# CLI (defaults to http://localhost:10101)
+./target/release/channel health
+./target/release/channel send broadcasts "hello from rust"
+./target/release/channel topics
+./target/release/channel agents --within 600
+./target/release/channel race "design Q?" --task-id demo \
+    --workers claude:%5,codex:%6,gemini:%7 --wait 120
+```
+
+### Environment variables
+
+| Var | Default | Effect |
 |---|---|---|
-| `tmux send-keys` | Push a line into another pane | No reply, no visibility, no fan-out |
-| `redis-cli xadd` | Append to a stream | No tmux awareness, no agent lifecycle |
-| MCP servers | Tool-call to a specific server | Single in-process, no cross-pane bus |
-| Maestro / dispatcher | Spawn parallel headless agents | Each run is fresh; no persistent pool |
+| `SESSION_CHANNEL_URL` | `http://localhost:10101` | CLI: target service base URL |
+| `SESSION_CHANNEL_KEY` | `change-me-in-production` | CLI: `x-local-key` value |
+| `SESSION_CHANNEL_PORT` | `10101` | Service: bind port |
+| `SESSION_CHANNEL_REDIS_URL` | `redis://127.0.0.1:6379/0` | Service: Redis URL |
+| `SESSION_CHANNEL_ALLOWED_ORIGINS` | (config.yaml) | Service: CORS allow-list (comma-sep) |
+| `SESSION_CHANNEL_HOME` | (auto-detect) | Service: optional config.yaml dir |
+| `TMUX_PANE` | (auto) | CLI: informs default `sender` field |
+| `CHANNEL_LOOP` | (unset) | Wrappers: set to `1` to enable auto-respawn |
 
-`session-channel` is the missing **persistent relay-pool with observability**:
-
-- Workers stay alive across many tasks (re-use long-lived sessions, keep model warm)
-- Every cross-pane message lands in a single Redis Stream you can `read` or visualise
-- One command races / debates across N CLIs — no per-CLI glue
-
----
-
-## Architecture
+## Architecture (same as Python — drop-in)
 
 ```
-                 ┌──────────────────────────────────────────────┐
-                 │  Dashboard  (FastAPI + SSE, port 10101)      │
-                 │  - live agent cards (CLI / last tool / msg)  │
-                 │  - topic browser                             │
-                 └─────────────────┬────────────────────────────┘
-                                   │
-                                   │ HTTP + SSE
-                                   │
-                 ┌─────────────────┴────────────────────────────┐
-                 │              Redis Streams                   │
-                 │ topic=agents   topic=tasks   topic=handoffs  │
-                 │ topic=broadcasts   topic=sessions  …         │
-                 └───┬───────────────────┬─────────────────┬────┘
-                     │XADD/XREAD          │                 │
-                     │                    │                 │
-       ┌─────────────┴──┐  ┌──────────────┴──┐  ┌───────────┴──┐
-       │  channel CLI   │  │  Wrappers       │  │  Supervisor  │
-       │  (humans +     │  │  codex-with-…   │  │  (Cronicle / │
-       │   scripts)     │  │  gemini-with-…  │  │   systemd)   │
-       └────────┬───────┘  │  hook handler   │  └──────────────┘
-                │          └────────┬────────┘
-                │                   │
-                ▼                   ▼
-        tmux panes ─────────────────► CLI agents (Claude Code / Codex / Gemini / …)
-                                      announce / heartbeat / leave
+                ┌──────────────────────────────────────────────┐
+                │  Dashboard  (axum + SSE, port 10101)         │
+                │  GET / + GET /api/stream                     │
+                └─────────────────┬────────────────────────────┘
+                                  │ HTTP + SSE
+                                  ▼
+                ┌──────────────────────────────────────────────┐
+                │              Redis Streams                   │
+                └───┬───────────────────────────────────────┬──┘
+                    │ XADD / XRANGE / XREVRANGE / XTRIM     │
+                    ▼                                       ▼
+            channel CLI                              channel-service
+            (this crate)                             (this crate)
 ```
 
-The CLI is a thin wrapper around Redis XADD/XRANGE; the dashboard reads the same streams. Wrappers translate CLI-specific lifecycle (Codex `notify` hook, Gemini `--session-id`, Claude Code hooks) into the same `agents` topic events, so the dashboard is CLI-agnostic.
+The CLI binary uses `reqwest` blocking; the service binary uses `axum` + `tokio` + `redis-rs`.
 
----
+## Compatibility with Python
 
-## CLI Reference (8 commands)
+`session-channel` is byte-compatible with the archived Python reference on every public surface (CLI args, HTTP routes, Redis stream format, signed cookies). The two implementations can:
 
-```bash
-channel send <topic> <message> [--tag T] [--meta JSON] [--notify-target %P]
-channel read <topic> [--count N] [--oldest]
-channel topics
-channel health
-channel agents [--within SECONDS]
-channel tasks [--pending] [--max-age SECONDS] [--mark-timeout]
-channel race "<prompt>" --task-id <id> --workers cli:pane,cli:pane,…
-channel debate "<question>" --debate-id <id> --participants A:cli:pane,B:cli:pane \
-               [--rounds 3] [--synthesizer cli:pane]
-```
+- Coexist on the same Redis (different ports)
+- Issue signed cookies that the other validates
+- Be swapped at the service layer without changing CLIs, hooks, wrappers, or the dashboard
 
-| Command | Use case |
-|---|---|
-| `send` | Publish to any topic. `--tag` carries a verb (`announce`, `done`, `assign`, `tool`, …); `--meta` carries a JSON sidecar; `--notify-target` pushes a wakeup line into a pane via `tmux send-keys`. |
-| `read` | XRANGE/XREVRANGE the topic stream. Default: newest N. `--oldest` for replay. |
-| `topics` | List every Redis stream currently tracked. |
-| `health` | Round-trip ping to the FastAPI service + Redis. |
-| `agents` | Snapshot of "panes currently alive" in the agents topic (heartbeat + tool events within `--within` seconds). |
-| `tasks` | Reconciles the `tasks` topic: which `assign`s are still pending, which `done`/`failed`, which exceeded `--max-age`. `--mark-timeout` publishes a `timeout` event so callers can react. |
-| `race` | 1-to-N: dispatch the same prompt to several workers; each gets a unique `<base>-<cli>` task id. Use `--wait N` to block until all settle. |
-| `debate` | N-round critique loop across participants (alternating). Optional `--synthesizer` produces a Consensus/Conflicts/Final summary at the end. |
-
-See [`docs/integrations/`](docs/integrations/) for per-CLI integration recipes.
-
----
-
-## Worker Rule Integration
-
-For any CLI agent to behave as a session-channel worker, it needs to:
-
-1. Treat a prompt containing `[session-channel:trusted task=<id> from=<pane>]` as an authorised task
-2. Execute the task **as the user request**, then run the verbatim shell command that follows `after completion run:`
-
-The reference rule (Claude Code / Codex / Gemini / Copilot / Opencode / Qwen all support it) lives in [`examples/worker-rule.md`](examples/worker-rule.md). Drop it into your CLI's instruction layer (e.g. `~/.claude/rules/`, `AGENTS.md`, `GEMINI.md`) and the dispatch loop closes.
-
----
-
-## Configuration
-
-`config.yaml` (or override via env vars):
-
-| Key | Env var | Default | Purpose |
-|---|---|---|---|
-| `port` | `SESSION_CHANNEL_PORT` | `10101` | FastAPI bind port |
-| `redis_url` | — | `redis://127.0.0.1:6379/0` | Redis URL |
-| `allowed_origins` | `SESSION_CHANNEL_ALLOWED_ORIGINS` | localhost variants | CORS allow-list (comma-sep in env) |
-| `ttl_seconds` | — | `1800` | XTRIM minid age |
-| `relay_pool.workers` | — | (empty) | Supervisor-watched pane list |
-
-Install location is resolved by every wrapper / hook in this order:
-
-1. `$SESSION_CHANNEL_HOME` (explicit override)
-2. `$HOME/.session-channel` (standard install)
-3. Script-relative path (works in monorepo / source tree)
-
-Python interpreter override: `$SESSION_CHANNEL_PY` (defaults to `python3` on `$PATH`).
-
----
-
-## Development
-
-```bash
-# Run tests (requires fakeredis + freezegun + pytest-asyncio)
-pip install fakeredis freezegun pytest-asyncio
-python3 -m pytest tests/ -v
-
-# Lint
-ruff check .
-
-# Dev server with autoreload
-uvicorn main:app --reload --host 127.0.0.1 --port 10101
-```
-
-Repo layout:
-
-```
-cli/channel.py            — CLI entrypoint
-main.py                   — FastAPI app
-routes.py / store.py      — HTTP handlers + Redis store
-config.py / config.yaml   — config loader
-wrappers/                 — Codex / Gemini launch wrappers + Codex notify hook
-scripts/supervisor.py     — Cronicle-driven respawn supervisor
-templates/index.html      — single-file dashboard (vanilla JS)
-tests/                    — pytest fixtures + (planned) test suites
-dist/                     — install assets (Dockerfile, systemd unit, launchd plist)
-examples/                 — worker rule, CLI adapters, Cronicle job sample
-docs/integrations/        — per-CLI integration guides
-```
-
----
+The Python version (`operonlab/session-channel`, v0.2.0) remains the reference implementation while this Rust port stabilises. Following the upstream plan (`CHANGELOG.md` over there), the Rust port is **v2 polishing**, not a rewrite of unstable territory.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
-## Status
-
-Open-source debut: **v0.2.0** (2026-05). Phase 1-8 stabilised inside the upstream monorepo; Rust port (`session-channel-rs`) tracked as v2 milestone — Python stays the reference implementation until the API is locked in by real-world use.
+MIT — see `LICENSE` (inherited from upstream).

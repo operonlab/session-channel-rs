@@ -1,0 +1,71 @@
+[package]
+# Package name dropped the `-rs` suffix on 2026-05-12 P8 cutover when the
+# Rust implementation became the canonical session-channel. The GitHub
+# repo URL keeps `-rs` to avoid breaking existing user clone URLs.
+name = "session-channel"
+version = "0.1.0-alpha.1"
+edition = "2021"
+license = "MIT"
+description = "session-channel — cross-pane, cross-CLI pub-sub bus over tmux + Redis Streams"
+repository = "https://github.com/operonlab/session-channel-rs"
+authors = ["Jones Hong"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Binaries:
+#   - `channel`         CLI (talks to a session-channel HTTP service)
+#   - `channel-service` HTTP service (axum + redis-rs, replaces Python FastAPI)
+#
+# Library:
+#   - shared service modules (store / auth / routes), exposed so the service
+#     binary and integration tests can both link against them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[lib]
+name = "session_channel"
+path = "src/lib.rs"
+
+[[bin]]
+name = "channel"
+path = "src/main.rs"
+
+[[bin]]
+name = "channel-service"
+path = "src/bin/channel-service.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# Service-binary stack
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["json", "macros", "tokio"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "streams"] }
+futures = "0.3"
+async-stream = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Signed cookies (1:1 with Python itsdangerous URLSafeTimedSerializer — sha1 HMAC)
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+
+# Config loader (YAML)
+serde_yaml = "0.9"
+
+[dev-dependencies]
+# Test agents fill these in — keep available for unit/integration suites
+tokio = { version = "1", features = ["full", "test-util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
