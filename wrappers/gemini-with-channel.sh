@@ -30,7 +30,20 @@ ROLE="${CHANNEL_ROLE:-worker}"
 HB_INTERVAL="${CHANNEL_HEARTBEAT_INTERVAL:-60}"
 SESSION_ID="${CHANNEL_SESSION_ID:-$(uuidgen | tr 'A-Z' 'a-z')}"
 
-CHANNEL=/Users/joneshong/workshop/stations/session-channel/cli/channel.py
+# Resolve session-channel install home:
+#   1. $SESSION_CHANNEL_HOME (explicit override)
+#   2. $HOME/.session-channel (standard install location)
+#   3. script-relative (running from source tree / monorepo)
+if [[ -z "${SESSION_CHANNEL_HOME:-}" ]]; then
+  if [[ -d "$HOME/.session-channel/cli" ]]; then
+    SESSION_CHANNEL_HOME="$HOME/.session-channel"
+  else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SESSION_CHANNEL_HOME="${SCRIPT_DIR%/wrappers}"
+  fi
+fi
+
+CHANNEL="${SESSION_CHANNEL_HOME}/cli/channel.py"
 
 if [[ ! -x "$CHANNEL" ]]; then
   echo "gemini-with-channel: channel CLI not found at $CHANNEL" >&2
