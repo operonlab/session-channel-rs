@@ -1,28 +1,138 @@
 //! Core routes — `/health`, `POST /api/messages`, `GET /api/messages/{topic}`,
-//! `GET /api/topics`. Stub — filled by code-agent A3.
+//! `GET /api/topics`. Implemented by code-agent A3.
+//!
+//! Note: `store::*` and `auth::extract_identity` are still stubs (filled by A1/A2).
+//! This file compiles cleanly against those stub signatures.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
+
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Json, Router};
+use serde::Deserialize;
+use serde_json::{json, Value};
 
 use crate::service::AppState;
 
+// ─── Error type ──────────────────────────────────────────────────────────────
+
+struct ApiError(StatusCode, String);
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        (self.0, Json(json!({"detail": self.1}))).into_response()
+    }
+}
+
+macro_rules! api_err {
+    ($status:expr, $msg:expr) => {
+        return Err(ApiError($status, $msg.to_string()))
+    };
+}
+
+// ─── Rate-limit state (module-private static) ────────────────────────────────
+
+static RATE_MAP: OnceLock<Mutex<HashMap<String, Vec<Instant>>>> = OnceLock::new();
+
+fn rate_map() -> &'static Mutex<HashMap<String, Vec<Instant>>> {
+    RATE_MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Returns `Err` with 429 if sender has sent ≥ 10 messages in the last second.
+fn check_rate(sender: &str) -> Result<(), ApiError> {
+    let mut map = rate_map().lock().unwrap();
+    let now = Instant::now();
+    let window = map.entry(sender.to_string()).or_default();
+    window.retain(|t| now.duration_since(*t).as_secs_f64() < 1.0);
+    if window.len() >= 10 {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Rate limit exceeded (10 msg/s)".into(),
+        ));
+    }
+    window.push(now);
+    Ok(())
+}
+
+// ─── Auth helper ─────────────────────────────────────────────────────────────
+
+/// Returns true if any auth source produces a valid identity.
+/// Reads x-local-key header, ?key= query param, or workshop_session cookie.
+fn is_authenticated(
+    headers: &HeaderMap,
+    key_query: Option<&str>,
+    cfg: &crate::service::ServiceConfig,
+) -> bool {
+    let local_key_header = headers
+        .get("x-local-key")
+        .and_then(|v| v.to_str().ok());
+
+    // Manual cookie parse — no `cookie` crate available.
+    let cookie_value: Option<String> = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| {
+            raw.split(';').find_map(|part| {
+                let part = part.trim();
+                part.strip_prefix("workshop_session=")
+                    .map(|v| v.to_string())
+            })
+        });
+
+    crate::service::auth::extract_identity(
+        local_key_header,
+        key_query,
+        cookie_value.as_deref(),
+        &cfg.secret_key,
+        cfg.session_max_age,
+    )
+    .is_some()
+}
+
+// ─── Router ──────────────────────────────────────────────────────────────────
+
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/health", get(stub_health))
+        .route("/health", get(health))
         .route("/api/messages", post(stub_send))
         .route("/api/messages/:topic", get(stub_read))
         .route("/api/topics", get(stub_topics))
 }
 
-async fn stub_health() -> &'static str {
-    "core::health: not yet implemented (skeleton)"
+// ─── /health — no auth required ──────────────────────────────────────────────
+
+async fn health(State(mut state): State<AppState>) -> Json<Value> {
+    match crate::service::store::health_check(&mut state.redis, &state.cfg.topics_key).await {
+        Ok((redis_ok, active_topics)) => Json(json!({
+            "status": if redis_ok { "ok" } else { "degraded" },
+            "redis": redis_ok,
+            "active_topics": active_topics,
+        })),
+        Err(_) => Json(json!({
+            "status": "degraded",
+            "redis": false,
+            "active_topics": 0_u64,
+        })),
+    }
 }
+
+// ─── Stubs (replaced in follow-on commits) ───────────────────────────────────
+
+#[derive(Deserialize)]
+struct KeyQuery {
+    key: Option<String>,
+}
+
 async fn stub_send() -> &'static str {
-    "core::send: not yet implemented (skeleton)"
+    "core::send: not yet implemented"
 }
 async fn stub_read() -> &'static str {
-    "core::read: not yet implemented (skeleton)"
+    "core::read: not yet implemented"
 }
 async fn stub_topics() -> &'static str {
-    "core::topics: not yet implemented (skeleton)"
+    "core::topics: not yet implemented"
 }
