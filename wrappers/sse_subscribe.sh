@@ -40,6 +40,7 @@ start_sse_listener() {
   (
     # Backoff state: exponential 1s→2s→4s→…cap 60s, reset on success (≥5s).
     local _backoff=1
+    local _nudge_write_count=0   # counter for dedup-log rotation check
 
     # Outer loop: reconnect on SSE drop. curl exits on connection close;
     # service binary keep-alive is 30s.
@@ -75,6 +76,19 @@ start_sse_listener() {
                 fi
                 # Mark first so concurrent --notify and SSE-listener don't both push.
                 printf '%s\n' "$task_id" >> "$nudge_log"
+
+                # Dedup-log rotation: check every 100 writes; truncate to last 200
+                # lines when file exceeds 500 lines. Old task_ids never resurface so
+                # dropping history is safe.
+                _nudge_write_count=$(( _nudge_write_count + 1 ))
+                if [ $(( _nudge_write_count % 100 )) -eq 0 ]; then
+                  local _log_lines
+                  _log_lines=$(wc -l < "$nudge_log" 2>/dev/null || echo 0)
+                  if [ "$_log_lines" -gt 500 ]; then
+                    tail -200 "$nudge_log" > "$nudge_log.tmp" \
+                      && mv "$nudge_log.tmp" "$nudge_log"
+                  fi
+                fi
 
                 prompt=$(printf '%s' "$json" | jq -r '._meta.prompt // ""')
                 sender=$(printf '%s' "$json" | jq -r '.sender // "?"')
