@@ -28,5 +28,13 @@ pub fn run(_args: Args) -> Result<()> {
     // Python str(bool) → "True"/"False" (capital first letter); match exactly.
     let redis_str = if d.redis { "True" } else { "False" };
     println!("{} redis={}  topics={}", status, redis_str, d.active_topics);
+    // Failure-only diagnostic hint (does not pollute success output that older
+    // scripts may grep against).
+    if !d.redis {
+        eprintln!(
+            "   Hint: run `channel doctor` for diagnostics, or start Redis \
+             with `brew services start redis` / `docker compose up -d`."
+        );
+    }
     Ok(())
 }

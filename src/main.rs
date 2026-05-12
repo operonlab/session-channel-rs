@@ -33,6 +33,8 @@ enum Cmd {
     Topics(cmd::topics::Args),
     /// Check station health.
     Health(cmd::health::Args),
+    /// Diagnose the local environment (binary, service, redis, env vars).
+    Doctor(cmd::doctor::Args),
     /// List active agents (panes).
     Agents(cmd::agents::Args),
     /// Show task status (pending/done/failed/timeout) for the tasks topic.
@@ -50,6 +52,7 @@ fn main() -> Result<()> {
         Cmd::Read(a) => cmd::read::run(a),
         Cmd::Topics(a) => cmd::topics::run(a),
         Cmd::Health(a) => cmd::health::run(a),
+        Cmd::Doctor(a) => cmd::doctor::run(a),
         Cmd::Agents(a) => cmd::agents::run(a),
         Cmd::Tasks(a) => cmd::tasks::run(a),
         Cmd::Race(a) => cmd::race::run(a),

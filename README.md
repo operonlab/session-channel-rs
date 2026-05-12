@@ -155,6 +155,27 @@ cargo build --release --bins
     --workers claude:%5,codex:%6,gemini:%7 --wait 120
 ```
 
+## Quickstart
+
+Once `channel` is on `$PATH`, run the interactive bring-up — it asks where to put Redis + the service, optionally generates a random `SESSION_CHANNEL_KEY`, and finishes with a `channel doctor` verdict:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/operonlab/session-channel/main/quickstart.sh -o quickstart.sh
+chmod +x quickstart.sh
+./quickstart.sh           # interactive
+./quickstart.sh --yes     # full-auto: docker compose + random key
+```
+
+Then verify and send your first message:
+
+```bash
+channel doctor                          # PASS / WARN / FAIL per check
+channel send broadcasts "hello"
+channel read broadcasts --count 1
+```
+
+`channel doctor` is also a good first stop whenever something feels off — every FAIL line carries a `Fix:` with the exact command to run.
+
 ## Environment variables
 
 Applies to every install path (Docker / Homebrew / `install.sh` / source). For Docker, set these in your `.env` file; for the host CLI, export them in your shell rc.

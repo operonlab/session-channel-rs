@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `install.sh` — POSIX one-liner that detects OS/arch, downloads the right tarball, verifies the SHA256, and installs to `~/.local/bin`. Supports `--uninstall`.
 - `packaging/homebrew/session-channel.rb` — Homebrew formula source of truth (copied into `operonlab/homebrew-tap` per release). Includes `service do …` for `brew services start session-channel`.
 - README Install section restructured: Docker / Homebrew / `install.sh` / source as four distinct paths with the recommended path first.
+- **`channel doctor`** — new subcommand. Diagnoses CLI binary, service reachability, Redis, env vars, tmux context, and config-file pointers. Every FAIL line carries a `Fix:` line with an exact command. Exits 1 on any FAIL.
+- `channel health` now appends a one-line `Hint:` (to stderr) when the service reports Redis down, pointing at `channel doctor` and concrete restart commands. Success output is unchanged for grep compatibility.
+- `quickstart.sh` — interactive first-run script: picks a Redis + service path (docker compose / brew / skip), optionally generates a `SESSION_CHANNEL_KEY`, brings things up, and ends with a `channel doctor` verdict. `--yes` mode is fully unattended.
+- README Quickstart section added between Install and Environment variables.
 
 ### Changed
 - `test_agents_active_parity` marked `#[ignore]` — it reads the shared `ws:channel:agents` stream and is host-pollution-prone on dev boxes with live wrappers. CI runs it explicitly via `--ignored`.
