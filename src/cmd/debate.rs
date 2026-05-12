@@ -330,18 +330,30 @@ fn wait_for_outcome(client: &ApiClient, task_id: &str, timeout_s: u64) -> Outcom
 
 // ── dispatch_one ──────────────────────────────────────────────────────────────
 
+/// Arguments for `dispatch_one`, bundled to avoid `clippy::too_many_arguments`.
+struct DispatchCtx<'a> {
+    task_id: &'a str,
+    prompt: &'a str,
+    pane: &'a str,
+    role: &'a str,
+    base_id: &'a str,
+    extra_meta: Option<Map<String, Value>>,
+    summary_text: Option<&'a str>,
+}
+
 /// Publish one assign message to the tasks topic + tmux nudge.
 /// Returns `true` on publish success.  Mirrors Python `_dispatch_one`.
-fn dispatch_one(
-    client: &ApiClient,
-    task_id: &str,
-    prompt: &str,
-    pane: &str,
-    role: &str,
-    base_id: &str,
-    extra_meta: Option<Map<String, Value>>,
-    summary_text: Option<&str>,
-) -> bool {
+fn dispatch_one(client: &ApiClient, ctx: DispatchCtx<'_>) -> bool {
+    let DispatchCtx {
+        task_id,
+        prompt,
+        pane,
+        role,
+        base_id,
+        extra_meta,
+        summary_text,
+    } = ctx;
+
     // Build _meta sidecar.
     let mut meta = Map::new();
     meta.insert("v".to_string(), Value::Number(1.into()));
@@ -469,13 +481,15 @@ pub fn run(args: Args) -> Result<()> {
 
         let ok = dispatch_one(
             &client,
-            &task_id,
-            &prompt,
-            &p.pane,
-            &p.label,
-            base_id,
-            Some(extra),
-            None,
+            DispatchCtx {
+                task_id: &task_id,
+                prompt: &prompt,
+                pane: &p.pane,
+                role: &p.label,
+                base_id,
+                extra_meta: Some(extra),
+                summary_text: None,
+            },
         );
         if !ok {
             return Ok(());
@@ -573,13 +587,15 @@ pub fn run(args: Args) -> Result<()> {
 
             let ok = dispatch_one(
                 &client,
-                &synth_id,
-                &synth_prompt,
-                &synth.pane,
-                "synthesizer",
-                base_id,
-                None,
-                Some("synthesize debate transcript"),
+                DispatchCtx {
+                    task_id: &synth_id,
+                    prompt: &synth_prompt,
+                    pane: &synth.pane,
+                    role: "synthesizer",
+                    base_id,
+                    extra_meta: None,
+                    summary_text: Some("synthesize debate transcript"),
+                },
             );
             if !ok {
                 return Ok(());
