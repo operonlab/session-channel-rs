@@ -429,12 +429,16 @@ async fn test_list_active_agents_sort_order() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TEST 8 — publish + max_len trim: XLEN should stay ≤ 7 after 10 publishes
+// TEST 8 — publish + approximate max_len trim
 //
-// BUG DETECTED: store::publish does NOT apply the max_len parameter to the
-// Redis XADD call. After 10 publishes with max_len=5, XLEN grows to 10
-// instead of being capped at ~5. This test documents the invariant that
-// SHOULD hold and will FAIL until the bug is fixed.
+// Redis `MAXLEN ~ N` is an approximate trim: Redis only trims at macro-node
+// boundaries (default stream-node-max-entries = 100). Python's
+// `xadd(.., maxlen=N, approximate=True)` has exactly the same behaviour, so
+// this test was originally too strict (10 publishes / max_len=5 won't cross
+// the macro-node boundary and trim never fires on either implementation).
+//
+// We now publish enough messages to cross the boundary, then assert XLEN is
+// strictly below the unbounded count.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -443,15 +447,17 @@ async fn test_publish_maxlen_trim() {
     let topic = unique_topic("maxlen");
     let stream_key = format!("{}{}", PREFIX, topic);
 
-    // Publish 10 messages with max_len=5
-    for i in 1_u32..=10 {
+    // Publish 250 messages with max_len=50. With approximate trim the result
+    // should land below the macro-node ceiling (~ 100-200 on default Redis)
+    // and certainly well below 250.
+    for i in 1_u32..=250 {
         store::publish(
             &mut r,
             PREFIX,
             TOPICS_KEY,
             &topic,
             &[("text", &i.to_string())],
-            5,
+            50,
         )
         .await
         .expect("publish should succeed");
@@ -460,17 +466,14 @@ async fn test_publish_maxlen_trim() {
     let xlen: u64 = r.xlen(&stream_key).await.unwrap();
     cleanup(&mut r, &topic).await;
 
-    // BUG: max_len is not forwarded to XADD MAXLEN.
-    // Expected: xlen <= 7 (approximate trim allows small overshoot over max_len=5)
-    // Actual:   xlen == 10 (no trimming at all)
-    //
-    // This assert documents the INTENDED invariant.
-    // Remove this comment once the bug is fixed in store::publish.
     assert!(
-        xlen <= 7,
-        "BUG: store::publish ignores max_len parameter — after 10 publishes with max_len=5, \
-         XLEN must be ≤ 7 (approximate trim), got {}. \
-         Fix: pass MAXLEN ~ max_len to the XADD command in store::publish.",
+        xlen < 250,
+        "approximate trim should have fired; expected XLEN < 250, got {}",
+        xlen
+    );
+    assert!(
+        xlen >= 50,
+        "approximate trim must not undershoot max_len; got XLEN={}",
         xlen
     );
 }
