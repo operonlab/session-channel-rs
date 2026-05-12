@@ -36,13 +36,13 @@ fn redis_map_to_fields(
     map: &std::collections::HashMap<String, redis::Value>,
 ) -> Vec<(String, String)> {
     map.iter()
-        .filter_map(|(k, v)| {
+        .map(|(k, v)| {
             let s = match v {
                 redis::Value::BulkString(b) => String::from_utf8_lossy(b).into_owned(),
                 redis::Value::SimpleString(s) => s.clone(),
                 other => format!("{:?}", other),
             };
-            Some((k.clone(), s))
+            (k.clone(), s)
         })
         .collect()
 }

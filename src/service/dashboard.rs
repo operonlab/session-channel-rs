@@ -30,11 +30,7 @@ pub async fn dashboard(State(state): State<AppState>) -> Response {
     // single replacement semantics with `replacen(..., 1)`.
     let html = TEMPLATE_HTML.replacen("</head>", &format!("  {inject}\n</head>"), 1);
 
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        html,
-    )
-        .into_response()
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
 }
 
 /// Minimal HTML attribute-value escape — enough for a secret_key that should

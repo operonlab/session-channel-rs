@@ -427,9 +427,7 @@ fn test_read_order_newest_parity() {
     redis_cleanup(topic);
     seed_messages(&svc, topic, 5);
 
-    let rust = authed_get(&svc.rust_url(&format!(
-        "/api/messages/{topic}?order=newest&count=3"
-    )));
+    let rust = authed_get(&svc.rust_url(&format!("/api/messages/{topic}?order=newest&count=3")));
     let py = authed_get(&py_url(&format!(
         "/api/messages/{topic}?order=newest&count=3"
     )));
@@ -471,9 +469,7 @@ fn test_read_order_oldest_parity() {
     redis_cleanup(topic);
     seed_messages(&svc, topic, 5);
 
-    let rust = authed_get(&svc.rust_url(&format!(
-        "/api/messages/{topic}?order=oldest&count=2"
-    )));
+    let rust = authed_get(&svc.rust_url(&format!("/api/messages/{topic}?order=oldest&count=2")));
     let py = authed_get(&py_url(&format!(
         "/api/messages/{topic}?order=oldest&count=2"
     )));

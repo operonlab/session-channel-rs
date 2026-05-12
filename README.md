@@ -92,6 +92,14 @@ re-registers the pane, and resumes the SSE listener — keeping the worker slot
 alive indefinitely. Claude Code does not need this (it does not self-exit), so
 `claude-with-channel.sh` ignores `CHANNEL_LOOP`.
 
+## Prerequisites
+
+- **Rust 1.75+** — only if you want to build from source. Install via [rustup](https://rustup.rs/).
+- **Redis 6+** — local or remote. Quickest: `docker run -d -p 6379:6379 redis:7-alpine` or `brew services start redis`.
+- **(optional) tmux** — required only if you want pane-aware `sender` fields.
+
+Pre-built binaries, a Docker stack, a Homebrew tap, and a one-line `install.sh` are tracked for v0.3 (see [`CHANGELOG.md`](./CHANGELOG.md) and the project roadmap).
+
 ## Build & run
 
 ```bash
@@ -156,4 +164,4 @@ The Python version (`operonlab/session-channel`, v0.2.0) remains the reference i
 
 ## License
 
-MIT — see `LICENSE` (inherited from upstream).
+MIT — see [`LICENSE`](./LICENSE). Copyright © 2026 Jones Hong.
