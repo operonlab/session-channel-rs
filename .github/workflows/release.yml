@@ -32,8 +32,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Both macOS triples build on macos-14 (Apple Silicon). The x86_64
+          # target is produced via Apple's native cross-compile path (rustc
+          # supports darwin→darwin cross natively, no QEMU / cross-rs needed).
+          # macos-13 (Intel) was dropped because GitHub-hosted Intel runners
+          # routinely sit in queue for 30+ minutes on free quota.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-14
             use_cross: false
 
           - target: aarch64-apple-darwin
