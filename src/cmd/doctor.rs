@@ -88,10 +88,12 @@ pub fn run(_args: Args) -> Result<()> {
 
     // 2. channel-service binary on PATH (best-effort)
     match which_binary("channel-service") {
-        Some(p) => lines.push(Line::pass(
-            "channel-service binary",
-            p.display().to_string(),
-        )),
+        Some(p) => {
+            let detail = probe_service_version(&p)
+                .map(|v| format!("{} ({})", p.display(), v))
+                .unwrap_or_else(|| p.display().to_string());
+            lines.push(Line::pass("channel-service binary", detail));
+        }
         None => lines.push(Line::warn(
             "channel-service binary",
             "not found on $PATH (only matters if you want to run the service on this host)",
@@ -228,6 +230,25 @@ fn probe_service(cfg: &Config) -> (Line, Line) {
             };
             (svc, redis)
         }
+    }
+}
+
+/// Spawn `<path> --version` and return the trimmed first line of stdout.
+/// Returns `None` on any error (process spawn failure, non-zero exit, empty output).
+fn probe_service_version(path: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(out.stdout).ok()?;
+    let first = stdout.lines().next()?.trim().to_string();
+    if first.is_empty() {
+        None
+    } else {
+        Some(first)
     }
 }
 

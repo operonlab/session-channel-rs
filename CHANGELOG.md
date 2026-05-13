@@ -25,8 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `channel health` now appends a one-line `Hint:` (to stderr) when the service reports Redis down, pointing at `channel doctor` and concrete restart commands. Success output is unchanged for grep compatibility.
 - `quickstart.sh` — interactive first-run script: picks a Redis + service path (docker compose / brew / skip), optionally generates a `SESSION_CHANNEL_KEY`, brings things up, and ends with a `channel doctor` verdict. `--yes` mode is fully unattended.
 - README Quickstart section added between Install and Environment variables.
+- `channel-service --version` / `--help` (clap-driven; previously the binary started the server with no arg parsing, which broke `brew test do` and prevented doctor from showing the service version).
+- `channel doctor` now displays the channel-service binary version alongside the path when the binary is on $PATH.
 
 ### Changed
+- `packaging/homebrew/session-channel.rb` `test do` assertions updated to the new (correct) channel-service --version behaviour.
 - All tests in `tests/e2e_parity.rs` are now `#[ignore]` — they require an `operonlab/session-channel-py` reference service at `PYTHON_PORT` (10101 by default) for byte-level parity comparison; CI does not provision Python. Devs run `cargo test -- --ignored` locally on a box with the reference service. (Codex audit caught that CI would otherwise FAIL at `wait_for_health(PYTHON_PORT, …)` for every parity test.)
 - `cargo test` in CI no longer needs `--test-threads=1` for the default suite.
 - MSRV raised to **1.86** to match transitive deps `idna_adapter@1.2.2` + `icu_properties_data@2.2.0` (both require edition2024, stable in Rust 1.85; the deps further require 1.86). Builds against Rust 1.82–1.84 will fail.

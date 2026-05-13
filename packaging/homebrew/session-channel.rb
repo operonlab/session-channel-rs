@@ -62,7 +62,7 @@ class SessionChannel < Formula
   end
 
   test do
-    assert_match "channel", shell_output("#{bin}/channel --version")
-    assert_match "channel-service", shell_output("#{bin}/channel-service --version", 2).downcase
+    assert_match "channel 0.", shell_output("#{bin}/channel --version")
+    assert_match "channel-service 0.", shell_output("#{bin}/channel-service --version")
   end
 end
