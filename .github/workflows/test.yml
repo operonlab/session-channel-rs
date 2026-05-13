@@ -52,5 +52,8 @@ jobs:
       # PYTHON_PORT (10101 by default) for byte-level parity comparison;
       # CI does not provision Python. Devs run `cargo test -- --ignored`
       # locally on a box with the reference service.
+      # --all-targets covers integration tests (tests/) + binary unit tests
+      # (the cmd::doctor::tests module lives inside the `channel` binary).
+      # Using --tests alone would skip the bin unit tests.
       - name: cargo test (default suite)
-        run: cargo test --tests
+        run: cargo test --all-targets

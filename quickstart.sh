@@ -126,8 +126,10 @@ if [[ "$gen_key" =~ ^[Yy]$ ]]; then
       note "wrote SESSION_CHANNEL_KEY to ./.env"
       ;;
     2|3)
-      # Suggest exporting; do not silently mutate ~/.zshrc
+      # Suggest exporting; do not silently mutate ~/.zshrc.
+      # shellcheck disable=SC2016  # documentation: backticks and $VAR shown verbatim
       printf '\n  Add this to your shell rc (e.g. ~/.zshrc) and `source` it:\n'
+      # shellcheck disable=SC2016  # documentation: $VAR shown verbatim in export example
       printf '    export SESSION_CHANNEL_KEY="%s"\n\n' "$key"
       export SESSION_CHANNEL_KEY="$key"
       note "exported for this shell session"

@@ -27,8 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README Quickstart section added between Install and Environment variables.
 - `channel-service --version` / `--help` (clap-driven; previously the binary started the server with no arg parsing, which broke `brew test do` and prevented doctor from showing the service version).
 - `channel doctor` now displays the channel-service binary version alongside the path when the binary is on $PATH.
+- `channel doctor` now actively verifies `SESSION_CHANNEL_KEY` against the running service by hitting an authenticated endpoint (`/api/topics`); FAILs with a "key mismatch" Fix when the service returns 401. Previously doctor only checked the public `/health`, so a wrong key would silently PASS.
+- Unit tests for `cmd::doctor` (binary lookup + exec bit check).
 
 ### Changed
+- `install.sh` + `quickstart.sh`: silence ShellCheck SC2016 on documentation lines (single-quoted `$VAR` shown to the user verbatim is intentional, not a bug).
 - `packaging/homebrew/session-channel.rb` `test do` assertions updated to the new (correct) channel-service --version behaviour.
 - All tests in `tests/e2e_parity.rs` are now `#[ignore]` — they require an `operonlab/session-channel-py` reference service at `PYTHON_PORT` (10101 by default) for byte-level parity comparison; CI does not provision Python. Devs run `cargo test -- --ignored` locally on a box with the reference service. (Codex audit caught that CI would otherwise FAIL at `wait_for_health(PYTHON_PORT, …)` for every parity test.)
 - `cargo test` in CI no longer needs `--test-threads=1` for the default suite.

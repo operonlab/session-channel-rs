@@ -101,13 +101,14 @@ pub fn run(_args: Args) -> Result<()> {
         )),
     }
 
-    // 3. Service reachability + (4) Redis (single /health call)
+    // 3. Service reachability + (4) Redis + (5) Auth key (three probes)
     let cfg = Config::from_env();
-    let (svc_line, redis_line) = probe_service(&cfg);
+    let (svc_line, redis_line, auth_line) = probe_service(&cfg);
     lines.push(svc_line);
     lines.push(redis_line);
+    lines.push(auth_line);
 
-    // 5. Environment variables snapshot
+    // 6. Environment variables snapshot
     let key =
         env::var("SESSION_CHANNEL_KEY").unwrap_or_else(|_| "change-me-in-production".to_string());
     if key == "change-me-in-production" {
@@ -128,7 +129,7 @@ pub fn run(_args: Args) -> Result<()> {
         env::var("SESSION_CHANNEL_URL").unwrap_or_else(|_| cfg.base_url.clone()),
     ));
 
-    // 6. tmux context — sender field hint
+    // 7. tmux context — sender field hint
     match env::var("TMUX_PANE") {
         Ok(p) if !p.is_empty() => lines.push(Line::pass(
             "tmux",
@@ -143,7 +144,7 @@ pub fn run(_args: Args) -> Result<()> {
         )),
     }
 
-    // 7. Config-file pointers (informational only — service uses these, not CLI)
+    // 8. Config-file pointers (informational only — service uses these, not CLI)
     if let Ok(p) = env::var("SESSION_CHANNEL_CONFIG") {
         lines.push(Line::info("SESSION_CHANNEL_CONFIG", p));
     } else if let Ok(home) = env::var("SESSION_CHANNEL_HOME") {
@@ -156,7 +157,7 @@ pub fn run(_args: Args) -> Result<()> {
     render(&lines)
 }
 
-fn probe_service(cfg: &Config) -> (Line, Line) {
+fn probe_service(cfg: &Config) -> (Line, Line, Line) {
     let url = format!("{}/health", cfg.base_url);
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(3))
@@ -170,7 +171,8 @@ fn probe_service(cfg: &Config) -> (Line, Line) {
                 "this is a bug — please open an issue",
             );
             let redis = Line::info("redis", "skipped (service unreachable)");
-            return (svc, redis);
+            let auth = Line::info("auth", "skipped (service unreachable)");
+            return (svc, redis, auth);
         }
     };
 
@@ -187,7 +189,8 @@ fn probe_service(cfg: &Config) -> (Line, Line) {
                 "start the service: `docker compose up -d`  ·  or `brew services start session-channel`  ·  or `channel-service &`",
             );
             let redis = Line::info("redis", "skipped (service unreachable)");
-            (svc, redis)
+            let auth = Line::info("auth", "skipped (service unreachable)");
+            (svc, redis, auth)
         }
         Ok(r) if !r.status().is_success() => {
             let status = r.status();
@@ -201,7 +204,8 @@ fn probe_service(cfg: &Config) -> (Line, Line) {
                 },
             );
             let redis = Line::info("redis", "skipped (service unhealthy)");
-            (svc, redis)
+            let auth = Line::info("auth", "skipped (service unreachable)");
+            (svc, redis, auth)
         }
         Ok(r) => {
             #[derive(Deserialize)]
@@ -228,7 +232,55 @@ fn probe_service(cfg: &Config) -> (Line, Line) {
                     "start Redis: `docker compose up -d`  ·  or `brew services start redis`  ·  or `docker run -d -p 6379:6379 redis:7-alpine`",
                 )
             };
-            (svc, redis)
+            // Auth probe: hit /api/topics (authenticated endpoint) to verify SESSION_CHANNEL_KEY
+            let auth = probe_auth(cfg, &client);
+            (svc, redis, auth)
+        }
+    }
+}
+
+/// Probe the authenticated `/api/topics` endpoint to verify SESSION_CHANNEL_KEY matches the service.
+fn probe_auth(cfg: &Config, client: &reqwest::blocking::Client) -> Line {
+    let url = format!("{}/api/topics", cfg.base_url);
+    let resp = client
+        .get(&url)
+        .header("x-local-key", &cfg.local_key)
+        .send();
+
+    match resp {
+        Err(_) => Line::info("auth", "skipped (request failed)"),
+        Ok(r) => {
+            let status = r.status();
+            if status.is_success() {
+                // Best-effort: parse JSON array to get count
+                #[derive(Deserialize)]
+                struct TopicsResp {
+                    #[serde(default)]
+                    topics: Vec<serde_json::Value>,
+                }
+                let count_detail = if let Ok(body) = r.json::<TopicsResp>() {
+                    format!(
+                        "SESSION_CHANNEL_KEY accepted (returned {} topics)",
+                        body.topics.len()
+                    )
+                } else {
+                    "SESSION_CHANNEL_KEY accepted".to_string()
+                };
+                Line::pass("auth", count_detail)
+            } else if status.as_u16() == 401 {
+                Line::fail(
+                    "auth",
+                    "SESSION_CHANNEL_KEY rejected by service (401)",
+                    "export SESSION_CHANNEL_KEY to match what the running service was started with \
+                     (see container .env / your shell rc / `channel-service` startup logs)",
+                )
+            } else {
+                Line::warn(
+                    "auth",
+                    format!("/api/topics returned {status}"),
+                    "see service logs",
+                )
+            }
         }
     }
 }
@@ -343,5 +395,29 @@ fn is_tty() -> bool {
     #[cfg(not(unix))]
     {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_which_binary_nonexistent_returns_none() {
+        // A binary that cannot possibly exist on any system.
+        assert_eq!(which_binary("nonexistent-binary-xyz"), None);
+    }
+
+    #[test]
+    fn test_is_executable_non_exec_file() {
+        // /etc/hosts is always a regular file but never executable.
+        assert!(!is_executable(Path::new("/etc/hosts")));
+    }
+
+    #[test]
+    fn test_is_executable_shell_binary() {
+        // /bin/sh must be executable on any Unix system.
+        assert!(is_executable(Path::new("/bin/sh")));
     }
 }

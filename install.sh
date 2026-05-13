@@ -144,6 +144,7 @@ case ":${PATH}:" in
   *)
     warn "${INSTALL_DIR} is not on \$PATH"
     printf '   Add this line to your shell rc (e.g. ~/.zshrc):\n\n'
+    # shellcheck disable=SC2016  # documentation: single quotes intentional, $VAR shown to user verbatim
     printf '     export PATH="%s:$PATH"\n\n' "${INSTALL_DIR}"
     ;;
 esac

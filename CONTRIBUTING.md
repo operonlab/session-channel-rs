@@ -47,7 +47,7 @@ and `cargo test` on every push and pull request, so please run them locally firs
 
 Conventional Commits-style is preferred but not enforced:
 
-```
+```text
 feat(cmd): add channel doctor subcommand
 fix(service): correct topic-not-found status code
 docs(readme): expand quickstart
