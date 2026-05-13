@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cargo test` in CI no longer needs `--test-threads=1` for the default suite.
 - MSRV raised to **1.86** to match transitive deps `idna_adapter@1.2.2` + `icu_properties_data@2.2.0` (both require edition2024, stable in Rust 1.85; the deps further require 1.86). Builds against Rust 1.82–1.84 will fail.
 - Service now reads `SESSION_CHANNEL_HOST` env (default `127.0.0.1`). The Dockerfile and `docker-compose.yml` set this to `0.0.0.0` so the published container port is reachable.
+- Service now reads `SESSION_CHANNEL_KEY` env (previously the secret key was effectively hard-coded to `change-me-in-production` because `ServiceConfig::load` did not consult the env). The KEY injection that `docker-compose.yml` and `quickstart.sh` were already writing was a silent no-op before this fix; verified end-to-end (a request with a wrong `x-local-key` now correctly returns 401 against a container started with a custom KEY).
 - README's `Compatibility with Python` section rewritten to consistently describe the Python implementation as *archived reference only*; previously the section still called Python "the reference implementation" while the top of the README declared Rust canonical (P8 cutover).
 - `.dockerignore` no longer carries a `!README.md` exception (the Dockerfile does not COPY README).
 

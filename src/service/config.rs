@@ -120,6 +120,11 @@ impl ServiceConfig {
                 cfg.host = host;
             }
         }
+        if let Ok(key) = env::var("SESSION_CHANNEL_KEY") {
+            if !key.is_empty() {
+                cfg.secret_key = key;
+            }
+        }
         if let Ok(url) = env::var("SESSION_CHANNEL_REDIS_URL") {
             cfg.redis_url = url;
         }
